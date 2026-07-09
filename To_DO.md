@@ -22,9 +22,6 @@
    - Add a ramp-up and ramp-down period to the event (e.g., 15-minute linear ramp at start and end)
    - Add a second event later in the day to test multiple sequential DR activations
 
-7. **Decouple the simulation from the OpenADR real-time clock**
-   - Currently the simulation uses the real wall-clock time to schedule events, which makes testing slow
-   - Implement an "offline" / "mock" mode: the VTN event is pre-defined as a Python dict and injected directly into the EMS handler without running an actual HTTP server — this speeds up testing and is more suitable for a journal paper PoC
 
 ---
 
@@ -35,8 +32,6 @@
 9. **Add docstrings and type hints** to all classes and methods for clarity and readability in the paper's supplementary code
 
 10. **Add a `requirements.txt`** listing all dependencies (`openleadr`, `numpy`, `matplotlib`, `scipy`, `pyOpenSSL`, `cryptography`) with pinned versions
-
-11. **Write a standalone `run_offline_poc.py`** script that runs the full PoC without needing a live OpenADR server — useful for reproducibility and quick article demonstrations
 
 
 ---
@@ -63,3 +58,7 @@
 - Added comprehensive annotations for the OpenADR event window and EV arrival/departure times across the subplots.
 - Displayed a text box with vital summary statistics (Total Energy Shifted, Max Temp Dev., final EV SoC) on the Power Plot.
 - Output formats were improved, now generating both a PNG and a high-resolution PDF (`simulation_results.pdf`) for potential academic or reporting usage.
+
+- Completed Tasks 7 & 11: "Decouple the simulation from the OpenADR real-time clock" and "Write a standalone run_offline_poc.py script".
+- Added `run_offline_poc.py` which passes a mock Python dictionary directly to the `EMSOpenADRNode.handle_event()` bypassing the OpenADR live servers.
+- Using the offline script enables very fast deterministic simulations and easier debugging, while the full `main_simulation.py` still demonstrates the full server/client capability.
