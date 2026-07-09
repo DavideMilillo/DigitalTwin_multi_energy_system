@@ -87,7 +87,7 @@ async def main():
                 'intervals': [
                     {
                         'dtstart': now,
-                        'duration': timedelta(minutes=240), # 4 hours (16 steps)
+                        'duration': timedelta(minutes=120), # 2 hours (8 steps)
                         'signal_payload': 20.0              # Target reduction of 20 kW
                     }
                 ]
@@ -154,6 +154,13 @@ async def main():
             # Apply the optimized dispatch computed by the DT Sandbox (covers pre-event and event)
             dispatch_hvac = trajectories["hvac_power"][step]
             dispatch_ev = trajectories["ev_power"][step]
+
+            # Dynamically enforce target shed if in event window
+            if start_step <= step < end_step:
+                target_limit = max(0.0, baseline_total_power[-1] - target_shed)
+                current_uncontrollable = base_d + dispatch_hvac
+                if current_uncontrollable + dispatch_ev > target_limit:
+                    dispatch_ev = max(0.0, target_limit - current_uncontrollable)
             # determine alloc method if we are simulating the strategy
             # for simplicity we use the same fallback logic if we need to manually step it,
             # but wait, the actual sim should use the DT's decision!
@@ -180,6 +187,23 @@ async def main():
         sim_total_power.append(base_d + dispatch_hvac + actual_ev_p_real)
         for ev in real_ev_fleet.evs:
             sim_ev_socs[ev.id].append(ev.soc)
+
+    # 7.5 Quantitative Verification of Shed
+    print("\n--- Quantitative Verification of Shed ---")
+    print(f"Target Shed: {target_shed:.2f} kW from step {start_step} to {end_step-1}")
+    total_shed_missed = 0.0
+    for step in range(start_step, end_step):
+        base_p = baseline_total_power[step]
+        sim_p = sim_total_power[step]
+        actual_shed = base_p - sim_p
+
+        # Determine if target shed is met, allowing a small floating point tolerance
+        is_met = actual_shed >= target_shed - 1e-6
+        if not is_met:
+            total_shed_missed += (target_shed - actual_shed)
+        status = "MET" if is_met else f"MISSED (Short by {target_shed - actual_shed:.2f} kW)"
+        print(f"  Step {step}: Baseline {base_p:.2f} kW | Actual {sim_p:.2f} kW | Shed {actual_shed:.2f} kW | Status: {status}")
+    print("-----------------------------------------\n")
 
     # 8. Plotting
     print("[Simulation] Plotting results...")
