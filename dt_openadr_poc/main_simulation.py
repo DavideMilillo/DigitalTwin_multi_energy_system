@@ -159,7 +159,7 @@ async def main():
         ev_p_base = max(0.0, ev_p_base)
         
         b_base.step(T_out, hvac_p_base, dt_hours, mode="cooling")
-        actual_ev_p_base = ev_base.step(step, ev_p_base, dt_hours)
+        actual_ev_p_base = ev_base.step(step, ev_p_base, dt_hours, allocation_method="proportional")
         
         baseline_T_in.append(b_base.T_in)
         baseline_hvac_power.append(hvac_p_base)
@@ -169,20 +169,31 @@ async def main():
             baseline_ev_socs[ev.id].append(ev.soc)
             
         # --- Dispatch-Optimized (Actual) Simulation ---
-        if start_step <= step < end_step:
-            # Apply the optimized dispatch computed by the DT Sandbox
-            idx = step - start_step
-            dispatch_hvac = trajectories["hvac_power"][idx]
-            dispatch_ev = trajectories["ev_power"][idx]
+        if step < end_step:
+            # Apply the optimized dispatch computed by the DT Sandbox (covers pre-event and event)
+            dispatch_hvac = trajectories["hvac_power"][step]
+            dispatch_ev = trajectories["ev_power"][step]
+            # determine alloc method if we are simulating the strategy
+            # for simplicity we use the same fallback logic if we need to manually step it,
+            # but wait, the actual sim should use the DT's decision!
+            # The trajectories dictionary gives us the *total* EV power dispatch. We need to allocate it here.
+            # Strategy C pre-cool logic applies before start_step.
+            # We can use priority_departure for C, and proportional otherwise?
+            # It's safer to just use priority_departure anytime we are applying the DT trajectory
+            if strategy == 'C' or start_step <= step < end_step:
+                ev_alloc_method = "priority_departure"
+            else:
+                ev_alloc_method = "proportional"
         else:
-            # Normal operation (baseline)
+            # Normal operation (baseline) after event
             dispatch_hvac = real_building.P_HVAC_baseline
             active_evs_real = real_ev_fleet.get_active_evs(step)
             dispatch_ev = sum(min(ev.max_charging_power, (ev.target_soc - ev.soc) * ev.battery_capacity / dt_hours) for ev in active_evs_real if ev.soc < ev.target_soc)
             dispatch_ev = max(0.0, dispatch_ev)
+            ev_alloc_method = "proportional"
             
         real_building.step(T_out, dispatch_hvac, dt_hours, mode="cooling")
-        actual_ev_p_real = real_ev_fleet.step(step, dispatch_ev, dt_hours)
+        actual_ev_p_real = real_ev_fleet.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc_method)
         
         sim_T_in.append(real_building.T_in)
         sim_hvac_power.append(dispatch_hvac)
