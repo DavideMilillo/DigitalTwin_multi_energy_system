@@ -20,10 +20,6 @@
 
 ## Phase 2 — Physical Model Improvements
 
-3. **Improve the building thermal model**
-   - Add internal heat gains (occupancy, lighting, equipment) as a disturbance input in the RC equation
-   - Make the HVAC mode dynamic (the model should switch between heating/cooling based on whether T_out > T_in)
-   - Consider a deadband control: the HVAC only activates if T_in deviates from setpoint by more than ±0.5°C
 
 4. **Improve the EV fleet model**
    - Add a simple charging efficiency factor (e.g., η_charger = 0.92 for AC chargers)
@@ -57,6 +53,7 @@
 
 11. **Write a standalone `run_offline_poc.py`** script that runs the full PoC without needing a live OpenADR server — useful for reproducibility and quick article demonstrations
 
+
 ---
 ## Notes on Implementation
 - Completed Task 5: "Improve the DT Sandbox dispatch logic".
@@ -64,3 +61,7 @@
 - **Strategy B (Coupled Building + EV)** was modified. Gradual HVAC ramping logic was mentioned but for simplicity, we opted for maximum possible reduction based on total requirements, maintaining the core logic of prioritizing HVAC reduction before impacting EVs.
 - **Strategy C (Pre-cooling + Coupled)** was added. It cools the building at maximum HVAC capacity for a few steps before the OpenADR event, building thermal energy storage. During the event, HVAC is shed entirely if possible, preserving EV mobility.
 - **Score Metric**: A scalar `score` (comfort violation degree + EV SoC shortfall) was introduced to rank strategies even when all result in some violations. Strategy C is prioritized if equal scores occur.
+- Completed Task 3: "Improve the building thermal model".
+- Added `internal_heat_gain` property to `BuildingThermalModel` to simulate internal gains from occupants, equipment, and lighting (default set to 0.5 kW).
+- Added dynamic HVAC mode switching depending on whether `T_out` is higher or lower than `T_setpoint`.
+- Added deadband control parameter (default set to 0.5°C) to prevent short-cycling of the HVAC unit. If the building temperature remains within the setpoint ± deadband, the HVAC will not actuate to change the temperature.
