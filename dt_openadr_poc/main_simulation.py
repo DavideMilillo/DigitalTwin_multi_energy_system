@@ -154,9 +154,7 @@ async def main():
         
         # --- Baseline Simulation ---
         hvac_p_base = b_base.P_HVAC_baseline
-        active_evs_base = ev_base.get_active_evs(step)
-        ev_p_base = sum(min(ev.max_charging_power, (ev.target_soc - ev.soc) * ev.battery_capacity / dt_hours) for ev in active_evs_base if ev.soc < ev.target_soc)
-        ev_p_base = max(0.0, ev_p_base)
+        ev_p_base = ev_base.get_baseline_power(step, dt_hours)
         
         b_base.step(T_out, hvac_p_base, dt_hours, mode="cooling")
         actual_ev_p_base = ev_base.step(step, ev_p_base, dt_hours, allocation_method="proportional")
@@ -187,9 +185,7 @@ async def main():
         else:
             # Normal operation (baseline) after event
             dispatch_hvac = real_building.P_HVAC_baseline
-            active_evs_real = real_ev_fleet.get_active_evs(step)
-            dispatch_ev = sum(min(ev.max_charging_power, (ev.target_soc - ev.soc) * ev.battery_capacity / dt_hours) for ev in active_evs_real if ev.soc < ev.target_soc)
-            dispatch_ev = max(0.0, dispatch_ev)
+            dispatch_ev = real_ev_fleet.get_baseline_power(step, dt_hours)
             ev_alloc_method = "proportional"
             
         real_building.step(T_out, dispatch_hvac, dt_hours, mode="cooling")
