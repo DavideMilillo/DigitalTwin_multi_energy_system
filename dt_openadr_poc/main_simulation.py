@@ -200,12 +200,33 @@ async def main():
 
     # 8. Plotting
     print("[Simulation] Plotting results...")
+    plt.style.use('seaborn-v0_8-colorblind') # Colorblind-friendly palette
     time_hours = np.array(steps) * 0.25
     fig, axs = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
     
+    event_start_hour = start_step * 0.25
+    event_end_hour = end_step * 0.25
+
+    # Calculate summary statistics for text box
+    total_energy_shifted = np.sum(np.array(baseline_total_power) - np.array(sim_total_power)) * dt_hours
+    max_temp = np.max(sim_T_in)
+
+    soc_at_departure_str = []
+    for ev in real_ev_fleet.evs:
+        dep_step = min(ev.departure_step, len(sim_ev_socs[ev.id]) - 1)
+        soc_at_dep = sim_ev_socs[ev.id][dep_step]
+        soc_at_departure_str.append(f"{ev.id}: {soc_at_dep*100:.1f}%")
+
+    stats_text = (
+        f"--- PoC Summary ---\n"
+        f"Energy Shifted: {total_energy_shifted:.2f} kWh\n"
+        f"Max Indoor Temp: {max_temp:.1f} °C\n"
+        f"SoC at Departure:\n" + "\n".join(soc_at_departure_str)
+    )
+
     # Subplot 1: Total Power Demand Comparison
-    axs[0].plot(time_hours, baseline_total_power, 'r--', label='Baseline Total Power')
-    axs[0].plot(time_hours, sim_total_power, 'g-', label=f'DT-Optimized Total Power (Strategy {strategy})')
+    axs[0].plot(time_hours, baseline_total_power, linestyle='--', linewidth=1.5, label='Baseline Total Power')
+    axs[0].plot(time_hours, sim_total_power, linestyle='-', linewidth=2, label=f'DT-Optimized Total Power (Strategy {strategy})')
     
     # Draw demand limit during the event
     event_time_hours = np.arange(start_step, end_step) * 0.25
@@ -218,11 +239,11 @@ async def main():
     axs[0].grid(True, linestyle='--', alpha=0.6)
     
     # Subplot 2: Building Indoor Temp vs Ambient Temp & Comfort Bounds
-    axs[1].plot(time_hours, T_out_profile, 'y-', label='Outdoor Temperature')
-    axs[1].plot(time_hours, baseline_T_in, 'r--', label='Baseline Indoor Temperature')
-    axs[1].plot(time_hours, sim_T_in, 'g-', label='DT-Optimized Indoor Temperature')
-    axs[1].axhline(y=b_cfg["T_max"], color='darkred', linestyle=':', label='Comfort Max Limit')
-    axs[1].axhline(y=b_cfg["T_min"], color='blue', linestyle=':', label='Comfort Min Limit')
+    axs[1].plot(time_hours, T_out_profile, linestyle='-', alpha=0.7, label='Outdoor Temperature')
+    axs[1].plot(time_hours, baseline_T_in, linestyle='--', linewidth=1.5, label='Baseline Indoor Temperature')
+    axs[1].plot(time_hours, sim_T_in, linestyle='-', linewidth=2, label='DT-Optimized Indoor Temperature')
+    axs[1].axhline(y=b_cfg["T_max"], color='darkred', linestyle=':', linewidth=2, label='Comfort Max Limit')
+    axs[1].axhline(y=b_cfg["T_min"], color='blue', linestyle=':', linewidth=2, label='Comfort Min Limit')
     axs[1].set_ylabel('Temperature (°C)')
     axs[1].set_title('Building Indoor Thermal Dynamics')
     axs[1].legend(loc='upper left')
@@ -230,19 +251,54 @@ async def main():
     
     # Subplot 3: EV Fleet State of Charge (SoC) trajectories
     for ev_id, socs in sim_ev_socs.items():
-        axs[2].plot(time_hours, np.array(socs) * 100, '-', label=f'Optimized {ev_id}')
+        axs[2].plot(time_hours, np.array(socs) * 100, '-', linewidth=2, label=f'Optimized {ev_id}')
     for ev_id, socs in baseline_ev_socs.items():
-        axs[2].plot(time_hours, np.array(socs) * 100, '--', alpha=0.5, label=f'Baseline {ev_id}')
+        axs[2].plot(time_hours, np.array(socs) * 100, '--', linewidth=1.5, alpha=0.6, label=f'Baseline {ev_id}')
     axs[2].set_ylabel('State of Charge (%)')
-    axs[2].set_xlabel('Time of Day (Hours)')
+    axs[2].set_xlabel('Time of Day')
     axs[2].set_title('EV Fleet State of Charge (SoC)')
     axs[2].legend(loc='lower right')
     axs[2].grid(True, linestyle='--', alpha=0.6)
     
+    # Annotations and shaded regions
+    for ax in axs:
+        # Shaded region for OpenADR event window
+        ax.axvspan(event_start_hour, event_end_hour, color='gray', alpha=0.2, label='OpenADR Event' if ax == axs[0] else "")
+
+    # OpenADR Event Annotation
+    axs[0].text(event_start_hour + (event_end_hour - event_start_hour)/2, axs[0].get_ylim()[1]*0.85,
+                'OpenADR\nEvent', horizontalalignment='center', verticalalignment='top',
+                fontsize=10, bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2.0))
+
+    # Add statistics text box to the first subplot
+    props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)
+    axs[0].text(0.02, 0.95, stats_text, transform=axs[0].transAxes, fontsize=9,
+                verticalalignment='top', bbox=props)
+
+    # Annotate EV arrivals/departures in subplot 3
+    # Find suitable y-position for annotations
+    y_min_soc = 20
+    for ev in real_ev_fleet.evs:
+        arr_hour = ev.arrival_step * 0.25
+        dep_hour = ev.departure_step * 0.25
+        axs[2].annotate(f'{ev.id} Arr', xy=(arr_hour, y_min_soc), xytext=(arr_hour, y_min_soc - 10),
+                        arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5),
+                        fontsize=8, horizontalalignment='center', zorder=5)
+        axs[2].annotate(f'{ev.id} Dep', xy=(dep_hour, y_min_soc), xytext=(dep_hour, y_min_soc - 10),
+                        arrowprops=dict(facecolor='black', shrink=0.05, width=1, headwidth=5),
+                        fontsize=8, horizontalalignment='center', zorder=5)
+
+    # X-axis time-of-day labels
+    axs[2].set_xticks([0, 6, 12, 18, 24])
+    axs[2].set_xticklabels(['00:00', '06:00', '12:00', '18:00', '24:00'])
+    axs[2].set_xlim([0, 24])
+
     plt.tight_layout()
-    plot_filename = os.path.join(os.path.dirname(__file__), 'simulation_results.png')
-    plt.savefig(plot_filename, dpi=300)
-    print(f"[Simulation] Success! Plot saved as: {plot_filename}")
+    plot_filename_png = os.path.join(os.path.dirname(__file__), 'simulation_results.png')
+    plot_filename_pdf = os.path.join(os.path.dirname(__file__), 'simulation_results.pdf')
+    plt.savefig(plot_filename_png, dpi=300)
+    plt.savefig(plot_filename_pdf, format='pdf', dpi=300)
+    print(f"[Simulation] Success! Plots saved as: {plot_filename_png} and {plot_filename_pdf}")
     
     # Cleanup tasks
     vtn_task.cancel()
