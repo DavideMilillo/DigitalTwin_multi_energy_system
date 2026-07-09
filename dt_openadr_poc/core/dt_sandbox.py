@@ -64,6 +64,10 @@ class DigitalTwinSandbox:
                 dispatch_hvac = hvac_base_power
                 if start_step <= step < end_step:
                     dispatch_ev = max(0.0, ev_base_power - power_reduction_target)
+                    target_limit = max(0.0, total_baseline_power - power_reduction_target)
+                    current_uncontrollable = base_d + dispatch_hvac
+                    if current_uncontrollable + dispatch_ev > target_limit:
+                        dispatch_ev = max(0.0, target_limit - current_uncontrollable)
                 else:
                     dispatch_ev = ev_base_power
                 ev_alloc_method = "priority_departure" # use improved EV logic for all strategies during event
@@ -79,7 +83,14 @@ class DigitalTwinSandbox:
                     dispatch_hvac = hvac_base_power - hvac_reduction
 
                     remaining_reduction = needed_reduction - hvac_reduction
+                    # Ensure we don't dispatch more than what guarantees the shed target
+                    # But we also shouldn't dispatch negative power
                     dispatch_ev = max(0.0, ev_base_power - remaining_reduction)
+                    # Force a strict cap on total power to meet target limit exactly
+                    target_limit = max(0.0, total_baseline_power - power_reduction_target)
+                    current_uncontrollable = base_d + dispatch_hvac
+                    if current_uncontrollable + dispatch_ev > target_limit:
+                        dispatch_ev = max(0.0, target_limit - current_uncontrollable)
                 else:
                     dispatch_hvac = hvac_base_power
                     dispatch_ev = ev_base_power
@@ -101,6 +112,10 @@ class DigitalTwinSandbox:
 
                     remaining_reduction = needed_reduction - hvac_reduction
                     dispatch_ev = max(0.0, ev_base_power - remaining_reduction)
+                    target_limit = max(0.0, total_baseline_power - power_reduction_target)
+                    current_uncontrollable = base_d + dispatch_hvac
+                    if current_uncontrollable + dispatch_ev > target_limit:
+                        dispatch_ev = max(0.0, target_limit - current_uncontrollable)
                 else:
                     dispatch_hvac = hvac_base_power
                     dispatch_ev = ev_base_power

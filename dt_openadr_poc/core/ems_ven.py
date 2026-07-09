@@ -66,13 +66,13 @@ class EMSOpenADRNode:
             # For this PoC, we will simulate the event window starting at step 36 (09:00) for 16 steps (4 hours)
             # as a standard scenario. Let's parse actual start index from config or hardcode the mapping.
             # In our main simulation, we will trigger it for a specific window.
-            # Let's say the event is 4 hours (16 steps), starting at step 48 (12:00 PM).
+            # Let's say the event is 2 hours (8 steps), starting at step 36 (09:00 AM).
             # We'll map the duration to simulation step count.
             duration_minutes = duration.total_seconds() / 60
             duration_steps = int(duration_minutes / 15)
             
-            # Assume starting step is 44 (11:00 AM) for this event
-            start_step = 44
+            # Assume starting step is 36 (09:00 AM) for this event where flexible load is high
+            start_step = 36
             
             print(f"[EMS VEN] Event Details:")
             print(f"  - Start Step: {start_step} ({start_step * 15 // 60:02d}:{start_step * 15 % 60:02d})")
