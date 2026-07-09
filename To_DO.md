@@ -8,14 +8,6 @@
    - Cross-check the power balance at each simulation step (base load + HVAC + EVs = total)
    - Ensure the 20 kW shed target is actually met (not just "approximately" reduced) by adding a quantitative verification printout
 
-2. **Improve the plots — clearer pictures and legends**
-   - Add vertical shaded region to highlight the OpenADR event window in all subplots
-   - Use better color palette (colorblind-friendly, e.g. seaborn or matplotlib style sheets)
-   - Add time-of-day labels on the x-axis (00:00, 06:00, 12:00, 18:00, 24:00)
-   - Annotate the plots with key events: EV arrival/departure times, OpenADR event start/end
-   - Add a text box showing the PoC summary statistics (total energy shifted, max temp deviation, EV SoC at departure)
-   - Export plots as high-resolution PDF (for the article) alongside the PNG
-
 ---
 
 ## Phase 2 — Physical Model Improvements
@@ -64,3 +56,10 @@
 - Added `is_connected` status and `update_connection_status()` to explicitly track when EVs are physically present.
 - Improved validation for incoming EV configurations (checking `soc_init` >= 0 and warning if it already meets `target_soc`).
 - Extracted baseline charging logic into a reusable `get_baseline_power()` method on the EVFleetModel to decouple simulation loops from logic.
+- Completed Task 2: "Improve the plots — clearer pictures and legends".
+- Updated `dt_openadr_poc/main_simulation.py` with enhanced plotting features using a clean layout, specifically applying `plt.style.use('seaborn-v0_8-colorblind')`.
+- Added vertical shaded regions covering the OpenADR event window (hours 12 to 14) in all subplots for better visual context.
+- Transformed the x-axis to display time-of-day labels (00:00, 06:00, 12:00, etc.) by converting integer steps to time representations.
+- Added comprehensive annotations for the OpenADR event window and EV arrival/departure times across the subplots.
+- Displayed a text box with vital summary statistics (Total Energy Shifted, Max Temp Dev., final EV SoC) on the Power Plot.
+- Output formats were improved, now generating both a PNG and a high-resolution PDF (`simulation_results.pdf`) for potential academic or reporting usage.
