@@ -53,9 +53,7 @@ class DigitalTwinSandbox:
             # Calculate baseline powers
             hvac_base_power = b_sim.P_HVAC_baseline
             
-            active_evs = ev_sim.get_active_evs(step)
-            ev_base_power = sum(min(ev.max_charging_power, (ev.target_soc - ev.soc) * ev.battery_capacity / dt_hours) for ev in active_evs if ev.soc < ev.target_soc)
-            ev_base_power = max(0.0, ev_base_power)
+            ev_base_power = ev_sim.get_baseline_power(step, dt_hours)
             
             total_baseline_power = base_d + hvac_base_power + ev_base_power
             target_limit = max(0.0, total_baseline_power - power_reduction_target)

@@ -21,13 +21,6 @@
 ## Phase 2 — Physical Model Improvements
 
 
-4. **Improve the EV fleet model**
-   - Add a simple charging efficiency factor (e.g., η_charger = 0.92 for AC chargers)
-   - Simulate EV battery degradation guard: charging should taper above 80% SoC (constant-current / constant-voltage profile)
-   - Add a flag for "EV not connected" state (SoC is frozen when the EV is not at the charging station)
-   - Validate that the minimum SoC required at arrival is also respected as an input constraint
-
-
 ---
 
 ## Phase 3 — OpenADR Protocol Realism
@@ -65,3 +58,9 @@
 - Added `internal_heat_gain` property to `BuildingThermalModel` to simulate internal gains from occupants, equipment, and lighting (default set to 0.5 kW).
 - Added dynamic HVAC mode switching depending on whether `T_out` is higher or lower than `T_setpoint`.
 - Added deadband control parameter (default set to 0.5°C) to prevent short-cycling of the HVAC unit. If the building temperature remains within the setpoint ± deadband, the HVAC will not actuate to change the temperature.
+- Completed Task 4: "Improve the EV fleet model".
+- Added a `charging_efficiency` parameter (default 0.92) to scale energy actually going into the battery versus drawn from the grid.
+- Added a `get_charging_limit()` method that simulates battery degradation guards by tapering maximum charging power linearly from 100% at 80% SoC down to 20% near 100% SoC.
+- Added `is_connected` status and `update_connection_status()` to explicitly track when EVs are physically present.
+- Improved validation for incoming EV configurations (checking `soc_init` >= 0 and warning if it already meets `target_soc`).
+- Extracted baseline charging logic into a reusable `get_baseline_power()` method on the EVFleetModel to decouple simulation loops from logic.
