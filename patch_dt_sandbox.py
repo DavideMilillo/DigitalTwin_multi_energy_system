@@ -1,4 +1,9 @@
-# The Digital Twin simulation engine for "What-If" sandboxing
+import re
+
+with open('dt_openadr_poc/core/dt_sandbox.py', 'r') as f:
+    content = f.read()
+
+new_dt_sandbox = """# The Digital Twin simulation engine for "What-If" sandboxing
 
 import copy
 import numpy as np
@@ -8,9 +13,9 @@ class DigitalTwinSandbox:
         pass
 
     def simulate_scenario(self, building_model, ev_fleet_model, strategy, start_step, duration_steps, power_reduction_target, base_demand_profile, outdoor_temp_profile, dt_hours):
-        """
+        \"\"\"
         Simulates the demand response event using deep copies of the physical models.
-        
+
         Parameters:
         - building_model: BuildingThermalModel instance
         - ev_fleet_model: EVFleetModel instance
@@ -21,12 +26,12 @@ class DigitalTwinSandbox:
         - base_demand_profile: baseline non-HVAC electrical demand (array or list)
         - outdoor_temp_profile: outdoor temperature profile (array or list)
         - dt_hours: step size in hours (e.g. 0.25)
-        
+
         Returns:
         - feasible: bool (True if no violations occurred)
         - trajectories: dict of historical states during the simulation period
         - score: float metric (total comfort violation degree + EV SoC shortfall), 0 means perfect
-        """
+        \"\"\"
         b_sim = copy.deepcopy(building_model)
         ev_sim = copy.deepcopy(ev_fleet_model)
 
@@ -39,7 +44,7 @@ class DigitalTwinSandbox:
 
         feasible = True
         score = 0.0
-        
+
         end_step = start_step + duration_steps
 
         # For Strategy C, define a pre-cooling window
@@ -52,11 +57,11 @@ class DigitalTwinSandbox:
 
             # Calculate baseline powers
             hvac_base_power = b_sim.P_HVAC_baseline
-            
+
             active_evs = ev_sim.get_active_evs(step)
             ev_base_power = sum(min(ev.max_charging_power, (ev.target_soc - ev.soc) * ev.battery_capacity / dt_hours) for ev in active_evs if ev.soc < ev.target_soc)
             ev_base_power = max(0.0, ev_base_power)
-            
+
             total_baseline_power = base_d + hvac_base_power + ev_base_power
             target_limit = max(0.0, total_baseline_power - power_reduction_target)
 
@@ -69,7 +74,7 @@ class DigitalTwinSandbox:
                 else:
                     dispatch_ev = ev_base_power
                 ev_alloc_method = "priority_departure" # use improved EV logic for all strategies during event
-                
+
             elif strategy == 'B':
                 # Strategy B: Coupled Building + EV.
                 if start_step <= step < end_step:
@@ -86,7 +91,7 @@ class DigitalTwinSandbox:
                     dispatch_hvac = hvac_base_power
                     dispatch_ev = ev_base_power
                 ev_alloc_method = "priority_departure"
-                
+
             elif strategy == 'C':
                 # Strategy C: Pre-cooling + Coupled
                 if pre_cool_start <= step < start_step:
@@ -107,7 +112,7 @@ class DigitalTwinSandbox:
                     dispatch_hvac = hvac_base_power
                     dispatch_ev = ev_base_power
                 ev_alloc_method = "priority_departure"
-                
+
             else:
                 raise ValueError("Invalid strategy name. Choose 'A', 'B' or 'C'.")
 
@@ -118,7 +123,7 @@ class DigitalTwinSandbox:
             # Run physical steps
             b_sim.step(T_out, dispatch_hvac, dt_hours, mode="cooling")
             actual_ev_power = ev_sim.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc_method)
-            
+
             # Check for comfort violations at this step
             if b_sim.is_comfort_violated():
                 feasible = False
@@ -159,5 +164,9 @@ class DigitalTwinSandbox:
             "ev_socs": {ev_id: np.array(socs) for ev_id, socs in ev_soc_history.items()},
             "violation_details": violation_details
         }
-        
+
         return feasible, trajectories, score
+"""
+
+with open('dt_openadr_poc/core/dt_sandbox.py', 'w') as f:
+    f.write(new_dt_sandbox)
