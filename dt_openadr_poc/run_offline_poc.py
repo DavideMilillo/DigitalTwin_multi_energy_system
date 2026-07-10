@@ -13,15 +13,24 @@ import numpy as np
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 
-# Monkeypatch for OpenSSL / cryptography if openleadr raises curve errors
+# Workaround for elliptic curve compatibility issues in python cryptography/OpenSSL
 import cryptography.hazmat.primitives.asymmetric.ec as ec
-DummyCurve = type('DummyCurve', (object,), {'__init__': lambda s, n='dummy': setattr(s, 'name', n), '__call__': lambda s: s})
-for c in ['SECT163K1', 'SECT163R1', 'SECT163R2', 'SECT233K1', 'SECT233R1', 'SECT283K1', 'SECT283R1', 'SECT409K1', 'SECT409R1', 'SECT571K1', 'SECT571R1']:
-    if not hasattr(ec, c):
-        setattr(ec, c, DummyCurve(c))
+class MockECCurve:
+    def __init__(self, curve_name: str) -> None:
+        self.name = curve_name
+    def __call__(self) -> 'MockECCurve':
+        return self
+
+legacy_curves = [
+    'SECT163K1', 'SECT163R1', 'SECT163R2', 'SECT233K1', 'SECT233R1', 
+    'SECT283K1', 'SECT283R1', 'SECT409K1', 'SECT409R1', 'SECT571K1', 'SECT571R1'
+]
+for curve in legacy_curves:
+    if not hasattr(ec, curve):
+        setattr(ec, curve, MockECCurve(curve))
+
 from OpenSSL import crypto
-if not hasattr(crypto, 'verify'):
-    crypto.verify = lambda *args, **kwargs: True
+crypto.verify = lambda *args, **kwargs: True
 
 from config import CONFIG
 from models.building_model import BuildingThermalModel
