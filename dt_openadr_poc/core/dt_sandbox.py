@@ -1,3 +1,4 @@
+# core/dt_sandbox.py
 # The Digital Twin simulation engine for "What-If" sandboxing
 
 import copy
@@ -18,7 +19,7 @@ class DigitalTwinSandbox:
         """
         pass
 
-    def simulate_scenario(self, building_model: BuildingThermalModel, ev_fleet_model: EVFleetModel, strategy: str, start_step: int, duration_steps: int, power_reduction_target: float, base_demand_profile: List[float], outdoor_temp_profile: List[float], dt_hours: float) -> Tuple[bool, Dict[str, Any], float]:
+    def simulate_scenario(self, building_model: BuildingThermalModel, ev_fleet_model: EVFleetModel, strategy: str, current_step: int, start_step: int, duration_steps: int, power_reduction_target: float, base_demand_profile: List[float], outdoor_temp_profile: List[float], dt_hours: float) -> Tuple[bool, Dict[str, Any], float]:
         """
         Simulates the demand response event using deep copies of the physical models.
         
@@ -26,6 +27,7 @@ class DigitalTwinSandbox:
             building_model (BuildingThermalModel): The building thermal model instance.
             ev_fleet_model (EVFleetModel): The EV fleet model instance.
             strategy (str): Strategy to use: 'A' (EV only), 'B' (Coupled building + EV), or 'C' (Pre-cooling + Coupled).
+            current_step (int): The current simulation step from which to project forward.
             start_step (int): Step index when the event starts.
             duration_steps (int): How many steps the event lasts.
             power_reduction_target (float): Total kW to reduce from baseline.
@@ -58,13 +60,12 @@ class DigitalTwinSandbox:
         pre_cool_steps = 4 if strategy == 'C' else 0
         pre_cool_start = max(0, start_step - pre_cool_steps)
 
-        for step in range(0, end_step):
+        for step in range(current_step, end_step):
             T_out = outdoor_temp_profile[step]
             base_d = base_demand_profile[step]
 
             # Calculate baseline powers
             hvac_base_power = b_sim.P_HVAC_baseline
-            
             ev_base_power = ev_sim.get_baseline_power(step, dt_hours)
             
             total_baseline_power = base_d + hvac_base_power + ev_base_power
@@ -82,23 +83,17 @@ class DigitalTwinSandbox:
                         dispatch_ev = max(0.0, target_limit - current_uncontrollable)
                 else:
                     dispatch_ev = ev_base_power
-                ev_alloc_method = "priority_departure" # use improved EV logic for all strategies during event
+                ev_alloc_method = "priority_departure"
                 
             elif strategy == 'B':
                 # Strategy B: Coupled Building + EV.
                 if start_step <= step < end_step:
                     needed_reduction = power_reduction_target
-                    # Implement gradual HVAC ramping (reduce by up to 50% first step, etc. for simplicity just full reduction)
-                    # Let's say we just reduce HVAC by max possible without instantly breaking comfort.
-                    # As a simpler heuristic, we just cut HVAC fully if we need to.
                     hvac_reduction = min(needed_reduction, hvac_base_power)
                     dispatch_hvac = hvac_base_power - hvac_reduction
 
                     remaining_reduction = needed_reduction - hvac_reduction
-                    # Ensure we don't dispatch more than what guarantees the shed target
-                    # But we also shouldn't dispatch negative power
                     dispatch_ev = max(0.0, ev_base_power - remaining_reduction)
-                    # Force a strict cap on total power to meet target limit exactly
                     target_limit = max(0.0, total_baseline_power - power_reduction_target)
                     current_uncontrollable = base_d + dispatch_hvac
                     if current_uncontrollable + dispatch_ev > target_limit:
@@ -111,14 +106,17 @@ class DigitalTwinSandbox:
             elif strategy == 'C':
                 # Strategy C: Pre-cooling + Coupled
                 if pre_cool_start <= step < start_step:
-                    # Pre-cool: run HVAC at max power to drop temp as much as possible before event
-                    dispatch_hvac = b_sim.P_HVAC_max
+                    # Pre-cool: run HVAC at max power, but do not overcool below comfort minimum T_min
+                    if b_sim.T_in <= b_sim.T_min + 0.5:
+                        dispatch_hvac = 0.0
+                    elif b_sim.T_in <= b_sim.T_min + 1.0:
+                        dispatch_hvac = b_sim.P_HVAC_baseline
+                    else:
+                        dispatch_hvac = b_sim.P_HVAC_max
                     dispatch_ev = ev_base_power
                 elif start_step <= step < end_step:
                     # During event: shed HVAC fully, then EV
                     needed_reduction = power_reduction_target
-                    hvac_reduction = min(needed_reduction, b_sim.P_HVAC_max) # Because baseline might have changed, but assume we shed what we can
-                    # Wait, the target is relative to the baseline.
                     hvac_reduction = min(needed_reduction, hvac_base_power)
                     dispatch_hvac = hvac_base_power - hvac_reduction
 
@@ -137,11 +135,14 @@ class DigitalTwinSandbox:
                 raise ValueError("Invalid strategy name. Choose 'A', 'B' or 'C'.")
 
             # For steps before the event where we don't apply anything (baseline behavior), just use proportional
-            if step < start_step and strategy != 'C':
+            if step < start_step and (strategy != 'C' or step < pre_cool_start):
                 ev_alloc_method = "proportional"
 
+            # Determine whether building control is overridden by explicit DR strategy
+            is_controlled = (start_step <= step < end_step) or (strategy == 'C' and pre_cool_start <= step < start_step)
+
             # Run physical steps
-            b_sim.step(T_out, dispatch_hvac, dt_hours, mode="cooling")
+            b_sim.step(T_out, dispatch_hvac, dt_hours, mode="cooling", control_override=is_controlled)
             actual_ev_power = ev_sim.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc_method)
             
             # Check for comfort violations at this step
@@ -173,8 +174,6 @@ class DigitalTwinSandbox:
         for ev in ev_sim.evs:
             if ev.departure_step <= end_step and ev.soc < ev.target_soc:
                 feasible = False
-                # If they depart after end_step but their SoC is low *at the end of simulation*, it's technically a violation?
-                # Better to just add to score if they missed target at their departure. The loop above handles departures during the horizon.
 
         trajectories = {
             "T_in": np.array(t_in_history),

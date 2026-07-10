@@ -9,7 +9,7 @@ CONFIG = {
     # Building Thermal Parameters (cooling/summer scenario defaults)
     "building": {
         "R_th": 1.5,         # Thermal resistance (°C/kW)
-        "C_th": 15.0,        # Thermal capacitance (kWh/°C)
+        "C_th": 6.0,         # Thermal capacitance (kWh/°C)
         "COP": 3.0,          # Coefficient of Performance (Cooling/HP)
         "T_min": 20.0,       # Comfort minimum limit (°C)
         "T_max": 24.0,       # Comfort maximum limit (°C)
@@ -20,6 +20,7 @@ CONFIG = {
     
     # EV Fleet Settings
     "ev_fleet": {
+        "charging_efficiency": 0.92, # Default fleet charging efficiency
         "evs": [
             {
                 "id": "EV1",
@@ -47,6 +48,15 @@ CONFIG = {
                 "soc_init": 0.4,
                 "target_soc": 0.8,
                 "max_charging_power": 7.4 # kW
+            },
+            {
+                "id": "EV4",
+                "arrival_step": 52,      # 13:00
+                "departure_step": 84,    # 21:00
+                "battery_capacity": 75.0, # kWh
+                "soc_init": 0.1,         # 10% initial SoC
+                "target_soc": 0.8,       # 80% target at departure
+                "max_charging_power": 22.0 # kW
             }
         ]
     },

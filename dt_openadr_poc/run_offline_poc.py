@@ -74,7 +74,7 @@ async def main():
     )
 
     # Simulate receiving an OpenADR event directly instead of starting servers
-    now = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
+    now = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     mock_event = {
         'event_descriptor': {
             'event_id': 'mock-event-id',
@@ -115,7 +115,7 @@ async def main():
     print("[Simulation] OpenADR event resolved by EMS. Running full 24h simulation loop...")
 
     # Extract decision from EMS
-    strategy, trajectories, start_step, duration_steps, target_shed = ems_node.dispatch_result
+    strategy, trajectories, current_step, start_step, duration_steps, target_shed = ems_node.dispatch_result
     end_step = start_step + duration_steps
 
     # 7. Run 24h physical simulation loop
@@ -160,35 +160,32 @@ async def main():
             baseline_ev_socs[ev.id].append(ev.soc)
 
         # --- Dispatch-Optimized (Actual) Simulation ---
-        if step < end_step:
+        if current_step <= step < end_step:
             # Apply the optimized dispatch computed by the DT Sandbox (covers pre-event and event)
-            dispatch_hvac = trajectories["hvac_power"][step]
-            dispatch_ev = trajectories["ev_power"][step]
+            dispatch_hvac = trajectories["hvac_power"][step - current_step]
+            dispatch_ev = trajectories["ev_power"][step - current_step]
+            is_controlled = True
 
             # Dynamically enforce target shed if in event window
             if start_step <= step < end_step:
-                target_limit = max(0.0, baseline_total_power[-1] - target_shed)
+                target_limit = max(0.0, baseline_total_power[step] - target_shed)
                 current_uncontrollable = base_d + dispatch_hvac
                 if current_uncontrollable + dispatch_ev > target_limit:
                     dispatch_ev = max(0.0, target_limit - current_uncontrollable)
-            # determine alloc method if we are simulating the strategy
-            # for simplicity we use the same fallback logic if we need to manually step it,
-            # but wait, the actual sim should use the DT's decision!
-            # The trajectories dictionary gives us the *total* EV power dispatch. We need to allocate it here.
-            # Strategy C pre-cool logic applies before start_step.
-            # We can use priority_departure for C, and proportional otherwise?
-            # It's safer to just use priority_departure anytime we are applying the DT trajectory
+            
+            # Determine allocation method
             if strategy == 'C' or start_step <= step < end_step:
                 ev_alloc_method = "priority_departure"
             else:
                 ev_alloc_method = "proportional"
         else:
-            # Normal operation (baseline) after event
+            # Normal operation (baseline) outside control window
             dispatch_hvac = real_building.P_HVAC_baseline
             dispatch_ev = real_ev_fleet.get_baseline_power(step, dt_hours)
+            is_controlled = False
             ev_alloc_method = "proportional"
 
-        real_building.step(T_out, dispatch_hvac, dt_hours, mode="cooling")
+        real_building.step(T_out, dispatch_hvac, dt_hours, mode="cooling", control_override=is_controlled)
         actual_ev_p_real = real_ev_fleet.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc_method)
 
         sim_T_in.append(real_building.T_in)

@@ -33,7 +33,7 @@ class BuildingThermalModel:
         self.T_setpoint = (T_min + T_max) / 2.0
         self.deadband = 0.5 # Deadband of +/- 0.5°C
 
-    def step(self, T_out: float, P_HVAC_elec: float, dt_hours: float, mode: str = "cooling") -> float:
+    def step(self, T_out: float, P_HVAC_elec: float, dt_hours: float, mode: str = "cooling", control_override: bool = False) -> float:
         """
         Updates the indoor temperature using discrete-time thermal model.
 
@@ -47,6 +47,7 @@ class BuildingThermalModel:
             P_HVAC_elec (float): Requested HVAC electrical power (kW).
             dt_hours (float): Time step in hours.
             mode (str): Mode of operation (default: "cooling").
+            control_override (bool): If True, bypass deadband controls and apply commanded power directly.
 
         Returns:
             float: Updated indoor temperature (°C).
@@ -58,19 +59,20 @@ class BuildingThermalModel:
             dynamic_mode = "heating"
 
         # Deadband control
-        # If the temperature is within the deadband, HVAC does not activate
-        if abs(self.T_in - self.T_setpoint) <= self.deadband:
-            actual_P_HVAC_elec = 0.0
+        if control_override:
+            actual_P_HVAC_elec = P_HVAC_elec
         else:
-            # Check if HVAC is working in the "right" direction to restore setpoint
-            # E.g., if we are in cooling mode (T_out > setpoint) but T_in is below setpoint - deadband, we don't cool
-            # Actually, standard deadband just checks if we exceeded the threshold.
-            if dynamic_mode == "cooling" and self.T_in < self.T_setpoint - self.deadband:
-                actual_P_HVAC_elec = 0.0
-            elif dynamic_mode == "heating" and self.T_in > self.T_setpoint + self.deadband:
+            # If the temperature is within the deadband, HVAC does not activate
+            if abs(self.T_in - self.T_setpoint) <= self.deadband:
                 actual_P_HVAC_elec = 0.0
             else:
-                actual_P_HVAC_elec = P_HVAC_elec
+                # Check if HVAC is working in the "right" direction to restore setpoint
+                if dynamic_mode == "cooling" and self.T_in < self.T_setpoint - self.deadband:
+                    actual_P_HVAC_elec = 0.0
+                elif dynamic_mode == "heating" and self.T_in > self.T_setpoint + self.deadband:
+                    actual_P_HVAC_elec = 0.0
+                else:
+                    actual_P_HVAC_elec = P_HVAC_elec
 
         self.P_HVAC = min(max(actual_P_HVAC_elec, 0.0), self.P_HVAC_max)
         

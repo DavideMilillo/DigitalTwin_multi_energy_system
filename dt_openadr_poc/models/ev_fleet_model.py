@@ -1,6 +1,7 @@
 # models/ev_fleet_model.py
 # Simulates the EV Fleet State of Charge and availability
 from typing import List, Tuple, Dict, Any
+from config import CONFIG
 
 class EV:
     """
@@ -120,14 +121,17 @@ class EVFleetModel:
         Args:
             ev_configs (List[Dict[str, Any]]): List of configuration dictionaries for each EV.
         """
+        # Read the global default charging efficiency from config
+        default_eff = CONFIG["ev_fleet"].get("charging_efficiency", 0.92) if "CONFIG" in globals() else 0.92
         self.evs = [EV(
-            ev["id"],
-            ev["arrival_step"],
-            ev["departure_step"],
-            ev["battery_capacity"],
-            ev["soc_init"],
-            ev["target_soc"],
-            ev["max_charging_power"]
+            ev_id=ev["id"],
+            arrival_step=ev["arrival_step"],
+            departure_step=ev["departure_step"],
+            battery_capacity=ev["battery_capacity"],
+            soc_init=ev["soc_init"],
+            target_soc=ev["target_soc"],
+            max_charging_power=ev["max_charging_power"],
+            charging_efficiency=ev.get("charging_efficiency", default_eff)
         ) for ev in ev_configs]
 
     def get_active_evs(self, step: int) -> List[EV]:

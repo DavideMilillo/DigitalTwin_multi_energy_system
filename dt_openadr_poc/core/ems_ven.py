@@ -43,7 +43,7 @@ class EMSOpenADRNode:
         self.client.add_handler('on_event', self.handle_event)
         
         # Result log of the chosen dispatch strategy
-        self.dispatch_result: Optional[Tuple[str, Dict[str, Any], int, int, float]] = None
+        self.dispatch_result: Optional[Tuple[str, Dict[str, Any], int, int, int, float]] = None
         self.event_processed = asyncio.Event()
 
     async def start(self) -> None:
@@ -105,27 +105,30 @@ class EMSOpenADRNode:
             print(f"  - Total Duration: {total_duration_steps} steps ({total_duration_minutes:.1f} mins)")
             print(f"  - Max Target Shed Power: {max_shed_kW:.2f} kW")
             
+            # Calculate current_step (start of pre-cooling / lookahead window)
+            current_step = max(0, start_step - 4)
+
             # Invoke Digital Twin Sandboxing
             sandbox = DigitalTwinSandbox()
             
             # Evaluate Strategy A (EV Only)
             print("[EMS VEN] Digital Twin simulating Strategy A (EV Only)...")
             feasible_a, traj_a, score_a = sandbox.simulate_scenario(
-                self.building, self.ev_fleet, 'A', start_step, total_duration_steps,
+                self.building, self.ev_fleet, 'A', current_step, start_step, total_duration_steps,
                 max_shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
             )
             
             # Evaluate Strategy B (Coupled HVAC + EV)
             print("[EMS VEN] Digital Twin simulating Strategy B (Coupled Building-EV)...")
             feasible_b, traj_b, score_b = sandbox.simulate_scenario(
-                self.building, self.ev_fleet, 'B', start_step, total_duration_steps,
+                self.building, self.ev_fleet, 'B', current_step, start_step, total_duration_steps,
                 max_shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
             )
             
             # Evaluate Strategy C (Pre-cooling + Coupled)
             print("[EMS VEN] Digital Twin simulating Strategy C (Pre-cooling + Coupled Building-EV)...")
             feasible_c, traj_c, score_c = sandbox.simulate_scenario(
-                self.building, self.ev_fleet, 'C', start_step, total_duration_steps,
+                self.building, self.ev_fleet, 'C', current_step, start_step, total_duration_steps,
                 max_shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
             )
 
@@ -150,16 +153,13 @@ class EMSOpenADRNode:
             feasible_strategies = [s for s in strategies if s[1]]
 
             if feasible_strategies:
-                # Prioritize feasible strategy with the lowest score.
-                # If scores are equal (e.g., 0.0), it will prefer C > B > A due to the order in the list.
                 best_strategy = min(feasible_strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] Strategy {best_strategy[0]} is feasible with best score. Activating Strategy {best_strategy[0]}.")
-                self.dispatch_result = (best_strategy[0], best_strategy[3], start_step, total_duration_steps, max_shed_kW)
+                self.dispatch_result = (best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW)
             else:
-                # If all are infeasible, pick the one with the lowest violation score
                 best_strategy = min(strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] WARNING: All strategies violate bounds. Choosing Strategy {best_strategy[0]} with minimal impact (Score: {best_strategy[2]:.2f}).")
-                self.dispatch_result = (best_strategy[0], best_strategy[3], start_step, total_duration_steps, max_shed_kW)
+                self.dispatch_result = (best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW)
                 
             self.event_processed.set()
             return 'optIn'
