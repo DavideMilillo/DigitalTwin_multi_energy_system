@@ -151,12 +151,33 @@ async def main():
     # 6. Wait for the OpenADR event to arrive and be processed via DT sandboxing
     print("[Simulation] Waiting for OpenADR event to be processed...")
     await ems_node.event_processed.wait()
-    print("[Simulation] OpenADR event resolved by EMS. Running full 24h simulation loop...")
+    # Give a tiny buffer for any other events in the same poll cycle to be processed
+    await asyncio.sleep(1)
+    print("[Simulation] OpenADR events resolved by EMS. Running full 24h simulation loop...")
     
-    # Extract decision from EMS
-    strategy, trajectories, current_step, start_step, duration_steps, target_shed = ems_node.dispatch_result
-    end_step = start_step + duration_steps
+    # Extract decisions from EMS
+    dispatch_results = ems_node.dispatch_results
     
+    # Construct merged 24h dispatch schedules across the 96 steps
+    dispatch_hvac_merged = [None] * len(steps)
+    dispatch_ev_merged = [None] * len(steps)
+    dispatch_strategy_merged = [None] * len(steps)
+    dispatch_target_shed_merged = [0.0] * len(steps)
+    dispatch_start_step_merged = [None] * len(steps)
+    dispatch_end_step_merged = [None] * len(steps)
+    
+    for event in dispatch_results:
+        strategy, trajectories, current_step, start_step, duration_steps, target_shed = event
+        end_step = start_step + duration_steps
+        for step in range(current_step, end_step):
+            if step < len(steps):
+                dispatch_hvac_merged[step] = trajectories["hvac_power"][step - current_step]
+                dispatch_ev_merged[step] = trajectories["ev_power"][step - current_step]
+                dispatch_strategy_merged[step] = strategy
+                dispatch_target_shed_merged[step] = target_shed
+                dispatch_start_step_merged[step] = start_step
+                dispatch_end_step_merged[step] = end_step
+
     # 7. Run 24h physical simulation loop
     # We will log the actual trajectories of the system under the chosen dispatch
     sim_T_in = []
@@ -199,44 +220,50 @@ async def main():
             baseline_ev_socs[ev.id].append(ev.soc)
             
         # --- Dispatch-Optimized (Actual) Simulation ---
-        if current_step <= step < end_step:
-            # Apply the optimized dispatch computed by the DT Sandbox (covers pre-event and event)
-            dispatch_hvac = trajectories["hvac_power"][step - current_step]
-            dispatch_ev = trajectories["ev_power"][step - current_step]
+        if dispatch_hvac_merged[step] is not None:
+            # Apply the optimized dispatch computed by the DT Sandbox for this step
+            dispatch_hvac_val = dispatch_hvac_merged[step]
+            dispatch_ev_val = dispatch_ev_merged[step]
+            strat = dispatch_strategy_merged[step]
+            t_shed = dispatch_target_shed_merged[step]
+            s_step = dispatch_start_step_merged[step]
+            e_step = dispatch_end_step_merged[step]
             is_controlled = True
  
             # Dynamically enforce target shed if in event window
-            if start_step <= step < end_step:
-                target_limit = max(0.0, baseline_total_power[step] - target_shed)
-                current_uncontrollable = base_d + dispatch_hvac
-                if current_uncontrollable + dispatch_ev > target_limit:
-                    dispatch_ev = max(0.0, target_limit - current_uncontrollable)
+            if s_step <= step < e_step:
+                target_limit = max(0.0, baseline_total_power[step] - t_shed)
+                current_uncontrollable = base_d + dispatch_hvac_val
+                if current_uncontrollable + dispatch_ev_val > target_limit:
+                    dispatch_ev_val = max(0.0, target_limit - current_uncontrollable)
             
             # Determine allocation method
-            if strategy == 'C' or start_step <= step < end_step:
+            if strat == 'C' or s_step <= step < e_step:
                 ev_alloc_method = "priority_departure"
             else:
                 ev_alloc_method = "proportional"
+                
+            dispatch_hvac_actual = dispatch_hvac_val
+            dispatch_ev_actual = dispatch_ev_val
         else:
             # Normal operation (baseline) outside control window
-            dispatch_hvac = real_building.P_HVAC_baseline
-            dispatch_ev = real_ev_fleet.get_baseline_power(step, dt_hours)
+            dispatch_hvac_actual = real_building.P_HVAC_baseline
+            dispatch_ev_actual = real_ev_fleet.get_baseline_power(step, dt_hours)
             is_controlled = False
             ev_alloc_method = "proportional"
             
-        real_building.step(T_out, dispatch_hvac, dt_hours, mode="cooling", control_override=is_controlled)
-        actual_ev_p_real = real_ev_fleet.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc_method)
+        real_building.step(T_out, dispatch_hvac_actual, dt_hours, mode="cooling", control_override=is_controlled)
+        actual_ev_p_real = real_ev_fleet.step(step, dispatch_ev_actual, dt_hours, allocation_method=ev_alloc_method)
         
         sim_T_in.append(real_building.T_in)
-        sim_hvac_power.append(dispatch_hvac)
+        sim_hvac_power.append(dispatch_hvac_actual)
         sim_ev_power.append(actual_ev_p_real)
-        sim_total_power.append(base_d + dispatch_hvac + actual_ev_p_real)
+        sim_total_power.append(base_d + dispatch_hvac_actual + actual_ev_p_real)
         for ev in real_ev_fleet.evs:
             sim_ev_socs[ev.id].append(ev.soc)
 
     # 7.5 Quantitative Verification of Shed and Power Balance
     print("\n--- Quantitative Verification of Shed ---")
-    print(f"Target Shed: {target_shed:.2f} kW from step {start_step} to {end_step-1}")
 
     # Power balance cross-check
     for step in range(len(steps)):
@@ -253,28 +280,28 @@ async def main():
                 assert sim_ev_socs[ev_id][step] >= sim_ev_socs[ev_id][step-1], f"EV {ev_id} SoC decreased at step {step}"
                 assert baseline_ev_socs[ev_id][step] >= baseline_ev_socs[ev_id][step-1], f"Baseline EV {ev_id} SoC decreased at step {step}"
 
-    total_shed_missed = 0.0
-    for step in range(start_step, end_step):
-        base_p = baseline_total_power[step]
-        sim_p = sim_total_power[step]
-        actual_shed = base_p - sim_p
-
-        # Determine if target shed is met, allowing a small floating point tolerance
-        is_met = actual_shed >= target_shed - 1e-6
-        if not is_met:
-            total_shed_missed += (target_shed - actual_shed)
-        status = "MET" if is_met else f"MISSED (Short by {target_shed - actual_shed:.2f} kW)"
-        print(f"  Step {step}: Baseline {base_p:.2f} kW | Actual {sim_p:.2f} kW | Shed {actual_shed:.2f} kW | Status: {status}")
-    print("-----------------------------------------\n")
+    for i, event in enumerate(dispatch_results):
+        strat, traj, cur_step, s_step, dur_steps, t_shed = event
+        e_step = s_step + dur_steps
+        print(f"Event {i+1} Target Shed: {t_shed:.2f} kW from step {s_step} to {e_step-1} (Strategy {strat})")
+        total_shed_missed = 0.0
+        for step in range(s_step, e_step):
+            base_p = baseline_total_power[step]
+            sim_p = sim_total_power[step]
+            actual_shed = base_p - sim_p
+            is_met = actual_shed >= t_shed - 1e-6
+            if not is_met:
+                total_shed_missed += (t_shed - actual_shed)
+            status = "MET" if is_met else f"MISSED (Short by {t_shed - actual_shed:.2f} kW)"
+            print(f"  Step {step}: Baseline {base_p:.2f} kW | Actual {sim_p:.2f} kW | Shed {actual_shed:.2f} kW | Status: {status}")
+        print("-----------------------------------------")
+    print()
 
     # 8. Plotting
     print("[Simulation] Plotting results...")
     plt.style.use('seaborn-v0_8-colorblind') # Colorblind-friendly palette
     time_hours = np.array(steps) * 0.25
     fig, axs = plt.subplots(3, 1, figsize=(10, 12), sharex=True)
-    
-    event_start_hour = start_step * 0.25
-    event_end_hour = end_step * 0.25
 
     # Calculate summary statistics for text box
     total_energy_shifted = np.sum(np.array(baseline_total_power) - np.array(sim_total_power)) * dt_hours
@@ -286,21 +313,29 @@ async def main():
         soc_at_dep = sim_ev_socs[ev.id][dep_step]
         soc_at_departure_str.append(f"{ev.id}: {soc_at_dep*100:.1f}%")
 
+    strategies_used = ", ".join(list(set(event[0] for event in dispatch_results)))
     stats_text = (
         f"--- PoC Summary ---\n"
         f"Energy Shifted: {total_energy_shifted:.2f} kWh\n"
         f"Max Indoor Temp: {max_temp:.1f} °C\n"
+        f"Strategies: {strategies_used}\n"
         f"SoC at Departure:\n" + "\n".join(soc_at_departure_str)
     )
 
     # Subplot 1: Total Power Demand Comparison
     axs[0].plot(time_hours, baseline_total_power, linestyle='--', linewidth=1.5, label='Baseline Total Power')
-    axs[0].plot(time_hours, sim_total_power, linestyle='-', linewidth=2, label=f'DT-Optimized Total Power (Strategy {strategy})')
+    axs[0].plot(time_hours, sim_total_power, linestyle='-', linewidth=2, label='DT-Optimized Total Power')
     
-    # Draw demand limit during the event
-    event_time_hours = np.arange(start_step, end_step) * 0.25
-    limit_profile = np.array(baseline_total_power[start_step:end_step]) - target_shed
-    axs[0].plot(event_time_hours, limit_profile, 'k:', linewidth=2, label='Grid Power Limit')
+    # Draw demand limit during each event
+    limit_labeled = False
+    for event in dispatch_results:
+        strat, traj, cur_step, s_step, dur_steps, t_shed = event
+        e_step = s_step + dur_steps
+        event_time_hours = np.arange(s_step, e_step) * 0.25
+        limit_profile = np.array(baseline_total_power[s_step:e_step]) - t_shed
+        label = 'Grid Power Limit' if not limit_labeled else ""
+        axs[0].plot(event_time_hours, limit_profile, 'k:', linewidth=2, label=label)
+        limit_labeled = True
     
     axs[0].set_ylabel('Power (kW)')
     axs[0].set_title('Total Building & EV Power Profile')
@@ -331,13 +366,27 @@ async def main():
     
     # Annotations and shaded regions
     for ax in axs:
-        # Shaded region for OpenADR event window
-        ax.axvspan(event_start_hour, event_end_hour, color='gray', alpha=0.2, label='OpenADR Event' if ax == axs[0] else "")
+        event_labeled = False
+        for event in dispatch_results:
+            strat, traj, cur_step, s_step, dur_steps, t_shed = event
+            e_step = s_step + dur_steps
+            event_start_hour = s_step * 0.25
+            event_end_hour = e_step * 0.25
+            
+            label = 'OpenADR Event' if (ax == axs[0] and not event_labeled) else ""
+            ax.axvspan(event_start_hour, event_end_hour, color='gray', alpha=0.2, label=label)
+            event_labeled = True
 
-    # OpenADR Event Annotation
-    axs[0].text(event_start_hour + (event_end_hour - event_start_hour)/2, axs[0].get_ylim()[1]*0.85,
-                'OpenADR\nEvent', horizontalalignment='center', verticalalignment='top',
-                fontsize=10, bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2.0))
+    # OpenADR Event Annotations
+    for i, event in enumerate(dispatch_results):
+        strat, traj, cur_step, s_step, dur_steps, t_shed = event
+        e_step = s_step + dur_steps
+        event_start_hour = s_step * 0.25
+        event_end_hour = e_step * 0.25
+        
+        axs[0].text(event_start_hour + (event_end_hour - event_start_hour)/2, axs[0].get_ylim()[1]*0.85,
+                    f'Event {i+1}\n({t_shed:.0f} kW)', horizontalalignment='center', verticalalignment='top',
+                    fontsize=9, bbox=dict(facecolor='white', alpha=0.8, edgecolor='none', pad=2.0))
 
     # Add statistics text box to the first subplot
     props = dict(boxstyle='round', facecolor='wheat', alpha=0.8)

@@ -43,7 +43,7 @@ class EMSOpenADRNode:
         self.client.add_handler('on_event', self.handle_event)
         
         # Result log of the chosen dispatch strategy
-        self.dispatch_result: Optional[Tuple[str, Dict[str, Any], int, int, int, float]] = None
+        self.dispatch_results: List[Tuple[str, Dict[str, Any], int, int, int, float]] = []
         self.event_processed = asyncio.Event()
 
     async def start(self) -> None:
@@ -155,11 +155,11 @@ class EMSOpenADRNode:
             if feasible_strategies:
                 best_strategy = min(feasible_strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] Strategy {best_strategy[0]} is feasible with best score. Activating Strategy {best_strategy[0]}.")
-                self.dispatch_result = (best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW)
+                self.dispatch_results.append((best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW))
             else:
                 best_strategy = min(strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] WARNING: All strategies violate bounds. Choosing Strategy {best_strategy[0]} with minimal impact (Score: {best_strategy[2]:.2f}).")
-                self.dispatch_result = (best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW)
+                self.dispatch_results.append((best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW))
                 
             self.event_processed.set()
             return 'optIn'
