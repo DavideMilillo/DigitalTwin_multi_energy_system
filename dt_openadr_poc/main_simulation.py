@@ -48,20 +48,43 @@ async def run_vtn_server():
     server.add_handler('on_create_party_registration', on_create_party_registration)
     
     # Schedule a Load Reduction event starting now (representing the active hour in our sim)
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
     server.add_event(
         ven_id='sip1',
         signal_name='LOAD_DISPATCH',
-        signal_type='level',
+        signal_type='delta', # More realistic standard for load reduction
         intervals=[
             {
                 'dtstart': now,
-                'duration': timedelta(minutes=120), # 2 hours (8 steps)
+                'duration': timedelta(minutes=15),  # 15 min ramp-up
+                'signal_payload': 10.0              # Target reduction of 10 kW (ramp up)
+            },
+            {
+                'dtstart': now + timedelta(minutes=15),
+                'duration': timedelta(minutes=90),  # 90 min max shed
                 'signal_payload': 20.0              # Target reduction of 20 kW
+            },
+            {
+                'dtstart': now + timedelta(minutes=105),
+                'duration': timedelta(minutes=15),  # 15 min ramp-down
+                'signal_payload': 10.0              # Target reduction of 10 kW (ramp down)
             }
         ]
     )
-    print(f"[VTN Server] Started. Scheduled a 2-hour, 20 kW LOAD_DISPATCH event.")
+
+    server.add_event(
+        ven_id='sip1',
+        signal_name='LOAD_DISPATCH',
+        signal_type='delta',
+        intervals=[
+            {
+                'dtstart': now + timedelta(minutes=360), # 6 hours later
+                'duration': timedelta(minutes=60), # 1 hour
+                'signal_payload': 15.0             # Target reduction of 15 kW
+            }
+        ]
+    )
+    print(f"[VTN Server] Started. Scheduled multiple events with ramp periods.")
     await server.run()
 
 async def main():

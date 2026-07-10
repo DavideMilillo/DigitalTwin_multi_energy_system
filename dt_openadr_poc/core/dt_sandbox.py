@@ -2,30 +2,42 @@
 
 import copy
 import numpy as np
+from typing import Tuple, Dict, Any, List
+
+from models.building_model import BuildingThermalModel
+from models.ev_fleet_model import EVFleetModel
+
 
 class DigitalTwinSandbox:
-    def __init__(self):
+    """
+    Simulation engine for analyzing and optimizing proactive demand response scenarios.
+    """
+    def __init__(self) -> None:
+        """
+        Initializes the Digital Twin Sandbox.
+        """
         pass
 
-    def simulate_scenario(self, building_model, ev_fleet_model, strategy, start_step, duration_steps, power_reduction_target, base_demand_profile, outdoor_temp_profile, dt_hours):
+    def simulate_scenario(self, building_model: BuildingThermalModel, ev_fleet_model: EVFleetModel, strategy: str, start_step: int, duration_steps: int, power_reduction_target: float, base_demand_profile: List[float], outdoor_temp_profile: List[float], dt_hours: float) -> Tuple[bool, Dict[str, Any], float]:
         """
         Simulates the demand response event using deep copies of the physical models.
         
-        Parameters:
-        - building_model: BuildingThermalModel instance
-        - ev_fleet_model: EVFleetModel instance
-        - strategy: 'A' (EV only), 'B' (Coupled building + EV), or 'C' (Pre-cooling + Coupled)
-        - start_step: step index when the event starts
-        - duration_steps: how many steps the event lasts
-        - power_reduction_target: total kW to reduce from baseline
-        - base_demand_profile: baseline non-HVAC electrical demand (array or list)
-        - outdoor_temp_profile: outdoor temperature profile (array or list)
-        - dt_hours: step size in hours (e.g. 0.25)
-        
+        Args:
+            building_model (BuildingThermalModel): The building thermal model instance.
+            ev_fleet_model (EVFleetModel): The EV fleet model instance.
+            strategy (str): Strategy to use: 'A' (EV only), 'B' (Coupled building + EV), or 'C' (Pre-cooling + Coupled).
+            start_step (int): Step index when the event starts.
+            duration_steps (int): How many steps the event lasts.
+            power_reduction_target (float): Total kW to reduce from baseline.
+            base_demand_profile (List[float]): Baseline non-HVAC electrical demand.
+            outdoor_temp_profile (List[float]): Outdoor temperature profile.
+            dt_hours (float): Step size in hours (e.g., 0.25).
+
         Returns:
-        - feasible: bool (True if no violations occurred)
-        - trajectories: dict of historical states during the simulation period
-        - score: float metric (total comfort violation degree + EV SoC shortfall), 0 means perfect
+            Tuple[bool, Dict[str, Any], float]:
+                - feasible (bool): True if no violations occurred.
+                - trajectories (Dict[str, Any]): Dictionary of historical states during the simulation period.
+                - score (float): Metric evaluating comfort violation and EV SoC shortfall (0 means perfect).
         """
         b_sim = copy.deepcopy(building_model)
         ev_sim = copy.deepcopy(ev_fleet_model)

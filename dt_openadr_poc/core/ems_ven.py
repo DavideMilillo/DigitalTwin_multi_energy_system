@@ -2,13 +2,28 @@
 # OpenADR Virtual End Node (VEN) and Energy Management System integration
 
 import asyncio
+from typing import List, Dict, Any, Optional, Tuple
 from openleadr import OpenADRClient
 from core.dt_sandbox import DigitalTwinSandbox
+from models.building_model import BuildingThermalModel
+from models.ev_fleet_model import EVFleetModel
 from config import CONFIG
 import numpy as np
 
 class EMSOpenADRNode:
-    def __init__(self, building_model, ev_fleet_model, outdoor_temp_profile, base_demand_profile):
+    """
+    OpenADR Virtual End Node (VEN) and Energy Management System (EMS).
+    """
+    def __init__(self, building_model: BuildingThermalModel, ev_fleet_model: EVFleetModel, outdoor_temp_profile: List[float], base_demand_profile: List[float]) -> None:
+        """
+        Initializes the EMS Node.
+
+        Args:
+            building_model (BuildingThermalModel): The building thermal model instance.
+            ev_fleet_model (EVFleetModel): The EV fleet model instance.
+            outdoor_temp_profile (List[float]): Outdoor temperature profile.
+            base_demand_profile (List[float]): Baseline non-HVAC electrical demand.
+        """
         self.building = building_model
         self.ev_fleet = ev_fleet_model
         self.outdoor_temp_profile = outdoor_temp_profile
@@ -28,17 +43,26 @@ class EMSOpenADRNode:
         self.client.add_handler('on_event', self.handle_event)
         
         # Result log of the chosen dispatch strategy
-        self.dispatch_result = None
+        self.dispatch_result: Optional[Tuple[str, Dict[str, Any], int, int, float]] = None
         self.event_processed = asyncio.Event()
 
-    async def start(self):
+    async def start(self) -> None:
+        """
+        Starts the OpenADR Client asynchronously.
+        """
         print(f"[EMS VEN] Starting OpenADR Client: {self.ven_name} connecting to {self.vtn_url}")
         asyncio.create_task(self.client.run())
 
-    async def handle_event(self, event):
+    async def handle_event(self, event: Dict[str, Any]) -> str:
         """
         OpenADR event handler. Triggered when the VTN sends an event.
         Extracts peak load reduction requests and uses the Digital Twin Sandbox to evaluate options.
+
+        Args:
+            event (Dict[str, Any]): The OpenADR event payload.
+
+        Returns:
+            str: Response to the VTN ('optIn' or 'optOut').
         """
         print("\n[EMS VEN] RECEIVED OPENADR EVENT!")
         try:
@@ -51,33 +75,35 @@ class EMSOpenADRNode:
             intervals = signal.get('intervals', [])
             print(f"[EMS VEN] Signal Name: {signal.get('signal_name')}, Type: {signal.get('signal_type')}")
             
-            # For simplicity, we assume the first interval is the demand response event
-            # We map its time to our simulation step (15-min intervals starting at 00:00)
             if not intervals:
                 print("[EMS VEN] No intervals in signal.")
                 return 'optOut'
                 
-            # Get event start and duration
-            start_time = intervals[0]['dtstart']
-            duration = intervals[0]['duration']
-            shed_kW = intervals[0]['signal_payload']
+            # Process multiple intervals if present (e.g. ramp-up, max shed, ramp-down)
+            # Find the max shed requirement to simplify the simulation scenario
+            max_shed_kW = max(interval.get('signal_payload', 0.0) for interval in intervals)
             
-            # Map start time to simulation steps (each step is 15 minutes / 0.25 hours)
-            # For this PoC, we will simulate the event window starting at step 36 (09:00) for 16 steps (4 hours)
-            # as a standard scenario. Let's parse actual start index from config or hardcode the mapping.
-            # In our main simulation, we will trigger it for a specific window.
-            # Let's say the event is 2 hours (8 steps), starting at step 36 (09:00 AM).
-            # We'll map the duration to simulation step count.
-            duration_minutes = duration.total_seconds() / 60
-            duration_steps = int(duration_minutes / 15)
+            # Sum up total duration
+            total_duration_minutes = sum(interval.get('duration').total_seconds() / 60 for interval in intervals)
+            total_duration_steps = int(total_duration_minutes / 15)
             
-            # Assume starting step is 36 (09:00 AM) for this event where flexible load is high
-            start_step = 36
+            # Use the start time of the first interval
+            start_time = intervals[0].get('dtstart')
+
+            # Dynamically calculate the start step based on the event's start time hour/minute
+            # Assuming the simulation starts at midnight (00:00) with 15-minute steps
+            if start_time:
+                start_hour = start_time.hour
+                start_minute = start_time.minute
+                start_step = int((start_hour * 60 + start_minute) / 15)
+            else:
+                # Default to step 36 (09:00 AM) if no start_time is provided
+                start_step = 36
             
-            print(f"[EMS VEN] Event Details:")
+            print(f"[EMS VEN] Event Details (Aggregated):")
             print(f"  - Start Step: {start_step} ({start_step * 15 // 60:02d}:{start_step * 15 % 60:02d})")
-            print(f"  - Duration: {duration_steps} steps ({duration_minutes:.1f} mins)")
-            print(f"  - Target Shed Power: {shed_kW:.2f} kW")
+            print(f"  - Total Duration: {total_duration_steps} steps ({total_duration_minutes:.1f} mins)")
+            print(f"  - Max Target Shed Power: {max_shed_kW:.2f} kW")
             
             # Invoke Digital Twin Sandboxing
             sandbox = DigitalTwinSandbox()
@@ -85,22 +111,22 @@ class EMSOpenADRNode:
             # Evaluate Strategy A (EV Only)
             print("[EMS VEN] Digital Twin simulating Strategy A (EV Only)...")
             feasible_a, traj_a, score_a = sandbox.simulate_scenario(
-                self.building, self.ev_fleet, 'A', start_step, duration_steps, 
-                shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
+                self.building, self.ev_fleet, 'A', start_step, total_duration_steps,
+                max_shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
             )
             
             # Evaluate Strategy B (Coupled HVAC + EV)
             print("[EMS VEN] Digital Twin simulating Strategy B (Coupled Building-EV)...")
             feasible_b, traj_b, score_b = sandbox.simulate_scenario(
-                self.building, self.ev_fleet, 'B', start_step, duration_steps, 
-                shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
+                self.building, self.ev_fleet, 'B', start_step, total_duration_steps,
+                max_shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
             )
             
             # Evaluate Strategy C (Pre-cooling + Coupled)
             print("[EMS VEN] Digital Twin simulating Strategy C (Pre-cooling + Coupled Building-EV)...")
             feasible_c, traj_c, score_c = sandbox.simulate_scenario(
-                self.building, self.ev_fleet, 'C', start_step, duration_steps,
-                shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
+                self.building, self.ev_fleet, 'C', start_step, total_duration_steps,
+                max_shed_kW, self.base_demand_profile, self.outdoor_temp_profile, self.dt_hours
             )
 
             print(f"[EMS VEN] DT Sandbox Results:")
@@ -128,12 +154,12 @@ class EMSOpenADRNode:
                 # If scores are equal (e.g., 0.0), it will prefer C > B > A due to the order in the list.
                 best_strategy = min(feasible_strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] Strategy {best_strategy[0]} is feasible with best score. Activating Strategy {best_strategy[0]}.")
-                self.dispatch_result = (best_strategy[0], best_strategy[3], start_step, duration_steps, shed_kW)
+                self.dispatch_result = (best_strategy[0], best_strategy[3], start_step, total_duration_steps, max_shed_kW)
             else:
                 # If all are infeasible, pick the one with the lowest violation score
                 best_strategy = min(strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] WARNING: All strategies violate bounds. Choosing Strategy {best_strategy[0]} with minimal impact (Score: {best_strategy[2]:.2f}).")
-                self.dispatch_result = (best_strategy[0], best_strategy[3], start_step, duration_steps, shed_kW)
+                self.dispatch_result = (best_strategy[0], best_strategy[3], start_step, total_duration_steps, max_shed_kW)
                 
             self.event_processed.set()
             return 'optIn'
