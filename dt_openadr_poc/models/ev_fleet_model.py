@@ -39,6 +39,10 @@ class EV:
         self.current_charging_power = 0.0 # kW
         self.is_connected = False
 
+        # Instantiate converter efficiency curve from the old codebase
+        from models.eta_model import ConverterEfficiency
+        self.eta_calculator = ConverterEfficiency()
+
     def update_connection_status(self, step: int) -> bool:
         """
         Updates and returns the connection status of the EV at a given step.
@@ -98,8 +102,12 @@ class EV:
         power_limit = self.get_charging_limit()
         power = min(power_kw, power_limit)
 
+        # Calculate dynamic charging efficiency based on charger loading ratio
+        ratio = power / self.max_charging_power if self.max_charging_power > 0 else 0.0
+        eta_charger = self.eta_calculator.calculate_efficiency(ratio)
+
         # Apply charging efficiency
-        energy_added = power * self.charging_efficiency * dt_hours
+        energy_added = power * eta_charger * dt_hours
         self.current_charging_power = power  # Power drawn from grid is before efficiency loss
         
         # Update SoC

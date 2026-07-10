@@ -32,6 +32,11 @@ class BuildingThermalModel:
         self.internal_heat_gain = 0.5 # Default internal heat gain in kW (e.g. from occupancy, lighting)
         self.T_setpoint = (T_min + T_max) / 2.0
         self.deadband = 0.5 # Deadband of +/- 0.5°C
+        
+        # Instantiate converter efficiency curve from the old codebase
+        from models.eta_model import ConverterEfficiency
+        self.eta_calculator = ConverterEfficiency()
+        self.eta_hvac = 1.0
 
     def step(self, T_out: float, P_HVAC_elec: float, dt_hours: float, mode: str = "cooling", control_override: bool = False) -> float:
         """
@@ -76,15 +81,19 @@ class BuildingThermalModel:
 
         self.P_HVAC = min(max(actual_P_HVAC_elec, 0.0), self.P_HVAC_max)
         
+        # Calculate dynamic HVAC converter efficiency based on compressor loading ratio
+        ratio = self.P_HVAC / self.P_HVAC_max if self.P_HVAC_max > 0 else 0.0
+        self.eta_hvac = self.eta_calculator.calculate_efficiency(ratio)
+        
         # Calculate heat gain/loss
         heat_from_outside = (T_out - self.T_in) / self.R_th
         heat_internal = self.internal_heat_gain
         
         if dynamic_mode == "cooling":
-            heat_removed_by_hvac = self.P_HVAC * self.COP
+            heat_removed_by_hvac = self.P_HVAC * self.COP * self.eta_hvac
         else:
             # heating mode: HVAC adds heat (so heat removed is negative)
-            heat_removed_by_hvac = -self.P_HVAC * self.COP
+            heat_removed_by_hvac = -self.P_HVAC * self.COP * self.eta_hvac
             
         dT = (dt_hours / self.C_th) * (heat_from_outside + heat_internal - heat_removed_by_hvac)
         self.T_in += dT

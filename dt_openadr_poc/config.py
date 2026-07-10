@@ -55,7 +55,7 @@ CONFIG = {
                 "departure_step": 84,    # 21:00
                 "battery_capacity": 75.0, # kWh
                 "soc_init": 0.1,         # 10% initial SoC
-                "target_soc": 0.8,       # 80% target at departure
+                "target_soc": 0.9,       # 90% target at departure
                 "max_charging_power": 22.0 # kW
             }
         ]
