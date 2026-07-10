@@ -11,8 +11,7 @@ class ConverterEfficiency:
         - p0 represents no-load/constant losses.
         - p1 represents load-dependent / resistive copper losses.
     
-    This provides a rigorous mathematical formulation suitable for publication,
-    independent of ENEA's empirical lookup tables.
+    This provides a rigorous mathematical formulation suitable for publication
     """
     def __init__(self, p0: float = 0.015, p1: float = 0.025) -> None:
         """
