@@ -8,13 +8,13 @@ CONFIG = {
     
     # Building Thermal Parameters (cooling/summer scenario defaults)
     "building": {
-        "R_th": 2.0,         # Thermal resistance (°C/kW)
-        "C_th": 10.0,        # Thermal capacitance (kWh/°C)
+        "R_th": 1.5,         # Thermal resistance (°C/kW)
+        "C_th": 15.0,        # Thermal capacitance (kWh/°C)
         "COP": 3.0,          # Coefficient of Performance (Cooling/HP)
         "T_min": 20.0,       # Comfort minimum limit (°C)
         "T_max": 24.0,       # Comfort maximum limit (°C)
         "T_in_init": 22.0,   # Initial indoor temperature (°C)
-        "P_HVAC_max": 15.0,  # Max electrical power of HVAC (kW)
+        "P_HVAC_max": 12.0,  # Max electrical power of HVAC (kW)
         "P_HVAC_baseline": 6.0, # Baseline electrical power (kW)
     },
     

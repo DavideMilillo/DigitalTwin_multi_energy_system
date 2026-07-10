@@ -228,9 +228,25 @@ async def main():
         for ev in real_ev_fleet.evs:
             sim_ev_socs[ev.id].append(ev.soc)
 
-    # 7.5 Quantitative Verification of Shed
+    # 7.5 Quantitative Verification of Shed and Power Balance
     print("\n--- Quantitative Verification of Shed ---")
     print(f"Target Shed: {target_shed:.2f} kW from step {start_step} to {end_step-1}")
+
+    # Power balance cross-check
+    for step in range(len(steps)):
+        base_d = base_load_profile[step]
+        calc_total = base_d + sim_hvac_power[step] + sim_ev_power[step]
+        assert abs(calc_total - sim_total_power[step]) < 1e-6, f"Power imbalance at step {step}: expected {calc_total}, got {sim_total_power[step]}"
+
+        base_calc_total = base_d + baseline_hvac_power[step] + baseline_ev_power[step]
+        assert abs(base_calc_total - baseline_total_power[step]) < 1e-6, f"Baseline power imbalance at step {step}"
+
+        # EV SoC monotonically increasing check
+        if step > 0:
+            for ev_id in sim_ev_socs:
+                assert sim_ev_socs[ev_id][step] >= sim_ev_socs[ev_id][step-1], f"EV {ev_id} SoC decreased at step {step}"
+                assert baseline_ev_socs[ev_id][step] >= baseline_ev_socs[ev_id][step-1], f"Baseline EV {ev_id} SoC decreased at step {step}"
+
     total_shed_missed = 0.0
     for step in range(start_step, end_step):
         base_p = baseline_total_power[step]
