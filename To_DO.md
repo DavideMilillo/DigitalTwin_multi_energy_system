@@ -16,21 +16,14 @@
 
 ## Phase 3 — OpenADR Protocol Realism
 
-6. **Make the VTN signal more realistic**
-   - Use `signal_type='x-loadControlCapacity'` or `signal_type='delta'` to express a load reduction in kW (more standard for demand response than `level`)
-   - Add a ramp-up and ramp-down period to the event (e.g., 15-minute linear ramp at start and end)
-   - Add a second event later in the day to test multiple sequential DR activations
 
 
 ---
 
 ## Phase 4 — Code Quality & Structure
 
-8. **Add `__init__.py` files to `models/` and `core/` packages** (required for proper Python module imports)
 
-9. **Add docstrings and type hints** to all classes and methods for clarity and readability in the paper's supplementary code
 
-10. **Add a `requirements.txt`** listing all dependencies (`openleadr`, `numpy`, `matplotlib`, `scipy`, `pyOpenSSL`, `cryptography`) with pinned versions
 
 
 ---
@@ -65,3 +58,14 @@
 - Added a `Quantitative Verification of Shed` section printed to stdout after the simulation loop to clearly log target vs actual shed.
 - Refined the core DT sandbox logic to forcefully cap uncontrollable load plus controllable EV dispatch so the shed target limit is rigidly maintained in the physical dispatch loop.
 - Adjusted OpenADR event start to Step 36 (09:00 AM) and length to 120 minutes because the EV schedule naturally doesn't demand enough load to achieve a 20 kW shed later in the day.
+- Completed Task 8: "Add `__init__.py` files to `models/` and `core/` packages".
+- Created empty `__init__.py` files in `models/` and `core/` to establish them as Python packages.
+- Completed Task 10: "Add a `requirements.txt` listing all dependencies".
+- Created `requirements.txt` with pinned versions for `openleadr`, `numpy`, `matplotlib`, `scipy`, `pyOpenSSL`, and `cryptography`.
+- Completed Task 9: "Add docstrings and type hints to all classes and methods".
+- Updated `building_model.py`, `ev_fleet_model.py`, `dt_sandbox.py`, and `ems_ven.py` with full typing annotations and descriptive docstrings.
+- Completed Task 6: "Make the VTN signal more realistic".
+- Changed VTN signal in `main_simulation.py` and `run_offline_poc.py` to use `signal_type='delta'`.
+- Added a 15-minute ramp-up and a 15-minute ramp-down period to the primary event in the VTN schedule, totaling 3 intervals.
+- Scheduled a second, sequential 60-minute load reduction event 6 hours later to test multiple DR activations.
+- Updated `ems_ven.py` to handle events with multiple intervals by extracting the maximum shed requirement and aggregating the duration.

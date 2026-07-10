@@ -74,7 +74,7 @@ async def main():
     )
 
     # Simulate receiving an OpenADR event directly instead of starting servers
-    now = datetime.now(timezone.utc)
+    now = datetime.now(timezone.utc).replace(hour=9, minute=0, second=0, microsecond=0)
     mock_event = {
         'event_descriptor': {
             'event_id': 'mock-event-id',
@@ -83,12 +83,22 @@ async def main():
         'event_signals': [
             {
                 'signal_name': 'LOAD_DISPATCH',
-                'signal_type': 'level',
+                'signal_type': 'delta',
                 'intervals': [
                     {
                         'dtstart': now,
-                        'duration': timedelta(minutes=120), # 2 hours (8 steps)
+                        'duration': timedelta(minutes=15),  # 15 min ramp-up
+                        'signal_payload': 10.0              # Target reduction of 10 kW (ramp up)
+                    },
+                    {
+                        'dtstart': now + timedelta(minutes=15),
+                        'duration': timedelta(minutes=90),  # 90 min max shed
                         'signal_payload': 20.0              # Target reduction of 20 kW
+                    },
+                    {
+                        'dtstart': now + timedelta(minutes=105),
+                        'duration': timedelta(minutes=15),  # 15 min ramp-down
+                        'signal_payload': 10.0              # Target reduction of 10 kW (ramp down)
                     }
                 ]
             }
