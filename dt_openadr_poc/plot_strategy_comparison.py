@@ -237,14 +237,18 @@ def main():
         # Annotate Strategy B violation or Strategy C precooling
         if strat == 'B':
             max_b = np.max(res['T_in'])
-            ax_t.annotate(f'Violation! ({max_b:.2f}°C)', xy=(15.75, max_b), xytext=(12, 24.3),
+            ax_t.annotate(f'Thermal Violation!\n({max_b:.2f}°C > 24.0°C)', xy=(15.75, max_b), xytext=(11.5, 24.3),
                           arrowprops=dict(facecolor='darkred', shrink=0.05, width=1.5, headwidth=6),
-                          fontsize=9, color='darkred', fontweight='bold')
+                          fontsize=8.5, color='darkred', fontweight='bold', bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='darkred', alpha=0.9))
         elif strat == 'C':
-            min_c = np.min(res['T_in'][52:56])
-            ax_t.annotate(f'Pre-cooled ({min_c:.1f}°C)', xy=(13.75, min_c), xytext=(9.5, 20.2),
-                          arrowprops=dict(facecolor='green', shrink=0.05, width=1.5, headwidth=6),
-                          fontsize=9, color='darkgreen', fontweight='bold')
+            min_c1 = res['T_in'][55] # 13:45
+            min_c2 = res['T_in'][77] # 19:15
+            ax_t.annotate(f'Pre-cool 1\n({min_c1:.1f}°C)', xy=(13.75, min_c1), xytext=(10.2, 20.4),
+                          arrowprops=dict(facecolor='darkgreen', shrink=0.05, width=1.5, headwidth=5),
+                          fontsize=8, color='darkgreen', fontweight='bold', bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='darkgreen', alpha=0.8))
+            ax_t.annotate(f'Pre-cool 2\n({min_c2:.1f}°C)', xy=(19.25, min_c2), xytext=(16.8, 19.8),
+                          arrowprops=dict(facecolor='darkgreen', shrink=0.05, width=1.5, headwidth=5),
+                          fontsize=8, color='darkgreen', fontweight='bold', bbox=dict(boxstyle='round,pad=0.2', facecolor='white', edgecolor='darkgreen', alpha=0.8))
 
         ax_t.grid(True, linestyle='--', alpha=0.6)
         if col_idx == 0:
