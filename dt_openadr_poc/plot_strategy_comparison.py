@@ -1,11 +1,11 @@
 # plot_strategy_comparison.py
 # Simulates full 24h day under Strategy A, Strategy B, and Strategy C
+# Uses the exact same dispatch merging mechanism as run_offline_poc.py / main_simulation.py
 # Generates publication-quality comparison plots
 
 import os
 import sys
 import csv
-import copy
 import matplotlib.pyplot as plt
 import numpy as np
 
@@ -19,118 +19,122 @@ from core.dt_sandbox import DigitalTwinSandbox
 
 def run_simulation_for_strategy(strategy_name: str, base_load_profile, T_out_profile, dt_hours=0.25):
     """
-    Runs 24h physical simulation forcing a specific strategy for both Event 1 (14:00) and Event 2 (20:00).
+    Runs 24h physical simulation forcing a specific strategy for both Event 1 (14:00) and Event 2 (20:00),
+    using the exact same DT Sandbox simulate_scenario + dispatch merging logic as run_offline_poc.py.
     """
     b_cfg = CONFIG["building"]
     ev_cfg = CONFIG["ev_fleet"]["evs"]
+    steps_count = len(base_load_profile)
 
-    b_model = BuildingThermalModel(
+    # Instantiate fresh physical models for DT sandbox evaluation
+    b_init = BuildingThermalModel(
         b_cfg["R_th"], b_cfg["C_th"], b_cfg["COP"],
         b_cfg["T_min"], b_cfg["T_max"], b_cfg["T_in_init"],
         b_cfg["P_HVAC_max"], b_cfg["P_HVAC_baseline"]
     )
-    ev_model = EVFleetModel(ev_cfg)
+    ev_init = EVFleetModel(ev_cfg)
 
-    # Event definitions
-    # Event 1: step 56 to 64 (14:00-16:00), target 20 kW
-    # Event 2: step 80 to 84 (20:00-21:00), target 15 kW
-    e1_start, e1_end, e1_target = 56, 64, 20.0
-    e2_start, e2_end, e2_target = 80, 84, 15.0
+    sandbox = DigitalTwinSandbox()
 
-    e1_precool_start = max(0, e1_start - 4) if strategy_name == 'C' else e1_start
-    e2_precool_start = max(0, e2_start - 4) if strategy_name == 'C' else e2_start
+    # Event definitions matching EMS VEN node (current_step = max(0, start_step - 4))
+    # Event 1: start_step 56 (14:00), current_step 52 (13:00), duration 8 (2h), target 20 kW
+    # Event 2: start_step 80 (20:00), current_step 76 (19:00), duration 4 (1h), target 15 kW
+    e1_start, e1_dur, e1_target = 56, 8, 20.0
+    e1_cur_step = max(0, e1_start - 4)
+
+    e2_start, e2_dur, e2_target = 80, 4, 15.0
+    e2_cur_step = max(0, e2_start - 4)
+
+    feasi_1, traj_1, score_1 = sandbox.simulate_scenario(
+        b_init, ev_init, strategy_name, e1_cur_step, e1_start, e1_dur, e1_target, base_load_profile, T_out_profile, dt_hours
+    )
+    feasi_2, traj_2, score_2 = sandbox.simulate_scenario(
+        b_init, ev_init, strategy_name, e2_cur_step, e2_start, e2_dur, e2_target, base_load_profile, T_out_profile, dt_hours
+    )
+
+    # Merge dispatch results across 96 steps, matching run_offline_poc.py / main_simulation.py
+    dispatch_results = [
+        (strategy_name, traj_1, e1_cur_step, e1_start, e1_dur, e1_target),
+        (strategy_name, traj_2, e2_cur_step, e2_start, e2_dur, e2_target)
+    ]
+
+    dispatch_hvac_merged = [None] * steps_count
+    dispatch_ev_merged = [None] * steps_count
+    dispatch_strategy_merged = [None] * steps_count
+    dispatch_target_shed_merged = [0.0] * steps_count
+    dispatch_start_step_merged = [None] * steps_count
+    dispatch_end_step_merged = [None] * steps_count
+
+    for event in dispatch_results:
+        strat, traj, cur_step, start_step, dur_steps, t_shed = event
+        end_step = start_step + dur_steps
+        for step in range(cur_step, end_step):
+            if step < steps_count:
+                dispatch_hvac_merged[step] = traj["hvac_power"][step - cur_step]
+                dispatch_ev_merged[step] = traj["ev_power"][step - cur_step]
+                dispatch_strategy_merged[step] = strat
+                dispatch_target_shed_merged[step] = t_shed
+                dispatch_start_step_merged[step] = start_step
+                dispatch_end_step_merged[step] = end_step
+
+    # Now execute full 24h physical simulation loop using real models
+    real_building = BuildingThermalModel(
+        b_cfg["R_th"], b_cfg["C_th"], b_cfg["COP"],
+        b_cfg["T_min"], b_cfg["T_max"], b_cfg["T_in_init"],
+        b_cfg["P_HVAC_max"], b_cfg["P_HVAC_baseline"]
+    )
+    real_ev_fleet = EVFleetModel(ev_cfg)
 
     T_in_traj = []
     hvac_power_traj = []
     ev_power_traj = []
     total_power_traj = []
-    ev_soc_traj = {ev.id: [] for ev in ev_model.evs}
+    ev_soc_traj = {ev.id: [] for ev in real_ev_fleet.evs}
 
-    for step in range(len(base_load_profile)):
+    for step in range(steps_count):
         T_out = T_out_profile[step]
         base_d = base_load_profile[step]
 
-        hvac_base_p = b_model.P_HVAC_baseline
-        ev_base_p = ev_model.get_baseline_power(step, dt_hours)
-        total_base_p = base_d + hvac_base_p + ev_base_p
+        if dispatch_hvac_merged[step] is not None:
+            dispatch_hvac_val = dispatch_hvac_merged[step]
+            dispatch_ev_val = dispatch_ev_merged[step]
+            strat = dispatch_strategy_merged[step]
+            t_shed = dispatch_target_shed_merged[step]
+            s_step = dispatch_start_step_merged[step]
+            e_step = dispatch_end_step_merged[step]
+            is_controlled = True
 
-        # Check if in Event 1, Event 2, or pre-cooling windows
-        in_e1 = (e1_start <= step < e1_end)
-        in_e2 = (e2_start <= step < e2_end)
-        in_e1_precool = (e1_precool_start <= step < e1_start) and (strategy_name == 'C')
-        in_e2_precool = (e2_precool_start <= step < e2_start) and (strategy_name == 'C')
+            if s_step <= step < e_step:
+                # Dynamic load limit check matching run_offline_poc.py
+                base_hvac_nom = 6.0
+                base_ev_nom = real_ev_fleet.get_baseline_power(step, dt_hours)
+                base_tot_nom = base_d + base_hvac_nom + base_ev_nom
+                target_limit = max(0.0, base_tot_nom - t_shed)
+                current_uncontrollable = base_d + dispatch_hvac_val
+                if current_uncontrollable + dispatch_ev_val > target_limit:
+                    dispatch_ev_val = max(0.0, target_limit - current_uncontrollable)
 
-        if in_e1:
-            target_shed = e1_target
-        elif in_e2:
-            target_shed = e2_target
+            if strat == 'C' or s_step <= step < e_step:
+                ev_alloc_method = "priority_departure"
+            else:
+                ev_alloc_method = "proportional"
+
+            dispatch_hvac_actual = dispatch_hvac_val
+            dispatch_ev_actual = dispatch_ev_val
         else:
-            target_shed = 0.0
-
-        # Dispatch calculation
-        if strategy_name == 'A':
-            dispatch_hvac = hvac_base_p
-            if in_e1 or in_e2:
-                dispatch_ev = max(0.0, ev_base_p - target_shed)
-                target_limit = max(0.0, total_base_p - target_shed)
-                if base_d + dispatch_hvac + dispatch_ev > target_limit:
-                    dispatch_ev = max(0.0, target_limit - (base_d + dispatch_hvac))
-            else:
-                dispatch_ev = ev_base_p
-            ev_alloc = "priority_departure" if (in_e1 or in_e2) else "proportional"
+            dispatch_hvac_actual = real_building.P_HVAC_baseline
+            dispatch_ev_actual = real_ev_fleet.get_baseline_power(step, dt_hours)
             is_controlled = False
+            ev_alloc_method = "proportional"
 
-        elif strategy_name == 'B':
-            if in_e1 or in_e2:
-                needed = target_shed
-                hvac_red = min(needed, hvac_base_p)
-                dispatch_hvac = hvac_base_p - hvac_red
-                rem_red = needed - hvac_red
-                dispatch_ev = max(0.0, ev_base_p - rem_red)
-                target_limit = max(0.0, total_base_p - target_shed)
-                if base_d + dispatch_hvac + dispatch_ev > target_limit:
-                    dispatch_ev = max(0.0, target_limit - (base_d + dispatch_hvac))
-            else:
-                dispatch_hvac = hvac_base_p
-                dispatch_ev = ev_base_p
-            ev_alloc = "priority_departure" if (in_e1 or in_e2) else "proportional"
-            is_controlled = (in_e1 or in_e2)
+        real_building.step(T_out, dispatch_hvac_actual, dt_hours, mode="cooling", control_override=is_controlled)
+        actual_ev_p_real = real_ev_fleet.step(step, dispatch_ev_actual, dt_hours, allocation_method=ev_alloc_method)
 
-        elif strategy_name == 'C':
-            if in_e1_precool or in_e2_precool:
-                if b_model.T_in <= b_model.T_min + 0.5:
-                    dispatch_hvac = 0.0
-                elif b_model.T_in <= b_model.T_min + 1.0:
-                    dispatch_hvac = b_model.P_HVAC_baseline
-                else:
-                    dispatch_hvac = b_model.P_HVAC_max
-                dispatch_ev = ev_base_p
-            elif in_e1 or in_e2:
-                needed = target_shed
-                hvac_red = min(needed, hvac_base_p)
-                dispatch_hvac = hvac_base_p - hvac_red
-                rem_red = needed - hvac_red
-                dispatch_ev = max(0.0, ev_base_p - rem_red)
-                target_limit = max(0.0, total_base_p - target_shed)
-                if base_d + dispatch_hvac + dispatch_ev > target_limit:
-                    dispatch_ev = max(0.0, target_limit - (base_d + dispatch_hvac))
-            else:
-                dispatch_hvac = hvac_base_p
-                dispatch_ev = ev_base_p
-            ev_alloc = "priority_departure" if (in_e1 or in_e2) else "proportional"
-            is_controlled = (in_e1 or in_e2 or in_e1_precool or in_e2_precool)
-
-        # Step simulation
-        b_model.step(T_out, dispatch_hvac, dt_hours, mode="cooling", control_override=is_controlled)
-        actual_ev_p = ev_model.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc)
-
-        actual_total_p = base_d + b_model.P_HVAC + actual_ev_p
-
-        T_in_traj.append(b_model.T_in)
-        hvac_power_traj.append(b_model.P_HVAC)
-        ev_power_traj.append(actual_ev_p)
-        total_power_traj.append(actual_total_p)
-        for ev in ev_model.evs:
+        T_in_traj.append(real_building.T_in)
+        hvac_power_traj.append(dispatch_hvac_actual)
+        ev_power_traj.append(actual_ev_p_real)
+        total_power_traj.append(base_d + dispatch_hvac_actual + actual_ev_p_real)
+        for ev in real_ev_fleet.evs:
             ev_soc_traj[ev.id].append(ev.soc)
 
     return {
@@ -156,7 +160,7 @@ def main():
     steps = np.array(steps)
     time_hours = steps * 0.25
 
-    # Run Baseline (no ADR)
+    # Run Baseline (no ADR) matching run_offline_poc.py exactly
     b_cfg = CONFIG["building"]
     ev_cfg = CONFIG["ev_fleet"]["evs"]
     b_base = BuildingThermalModel(
@@ -177,11 +181,11 @@ def main():
         b_base.step(T_out, hvac_p, 0.25, mode="cooling", control_override=False)
         actual_ev_p = ev_base.step(step, ev_p, 0.25, allocation_method="proportional")
         base_T_in.append(b_base.T_in)
-        base_tot_power.append(base_d + b_base.P_HVAC + actual_ev_p)
+        base_tot_power.append(base_d + hvac_p + actual_ev_p)
         for ev in ev_base.evs:
             base_ev_socs[ev.id].append(ev.soc)
 
-    # Run Strategy A, B, C
+    # Run Strategy A, B, C using identical EMS dispatch pipeline
     results_A = run_simulation_for_strategy('A', base_load_profile, T_out_profile)
     results_B = run_simulation_for_strategy('B', base_load_profile, T_out_profile)
     results_C = run_simulation_for_strategy('C', base_load_profile, T_out_profile)
@@ -314,9 +318,9 @@ def main():
     avg_soc_base = np.mean([socs for socs in base_ev_socs.values()], axis=0) * 100
 
     axs2[2].plot(time_hours, avg_soc_base, 'k--', alpha=0.6, label='Baseline Fleet SoC')
-    axs2[2].plot(time_hours, avg_soc_A, '#1f77b4', linewidth=2, label='Strategy A Fleet SoC (30% more curtailment)')
+    axs2[2].plot(time_hours, avg_soc_A, '#1f77b4', linewidth=2, label='Strategy A Fleet SoC')
     axs2[2].plot(time_hours, avg_soc_B, '#d62728', linewidth=2, label='Strategy B Fleet SoC')
-    axs2[2].plot(time_hours, avg_soc_C, '#2ca02c', linewidth=2, label='Strategy C Fleet SoC (Preserved Energy)')
+    axs2[2].plot(time_hours, avg_soc_C, '#2ca02c', linewidth=2, label='Strategy C Fleet SoC')
     axs2[2].set_ylabel('Fleet Average SoC (%)', fontsize=11)
     axs2[2].set_xlabel('Time of Day (Hours)', fontsize=11)
     axs2[2].set_title('EV Fleet Average State of Charge Comparison', fontsize=12, fontweight='bold')
