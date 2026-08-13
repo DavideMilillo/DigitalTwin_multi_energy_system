@@ -138,8 +138,8 @@ class DigitalTwinSandbox:
             if step < start_step and (strategy != 'C' or step < pre_cool_start):
                 ev_alloc_method = "proportional"
 
-            # Determine whether building control is overridden by explicit DR strategy
-            is_controlled = (start_step <= step < end_step) or (strategy == 'C' and pre_cool_start <= step < start_step)
+            # Determine whether building control is overridden by explicit DR strategy (B or C only)
+            is_controlled = (strategy in ['B', 'C'] and start_step <= step < end_step) or (strategy == 'C' and pre_cool_start <= step < start_step)
 
             # Run physical steps
             b_sim.step(T_out, dispatch_hvac, dt_hours, mode="cooling", control_override=is_controlled)
@@ -156,9 +156,9 @@ class DigitalTwinSandbox:
 
             # Save state trajectories
             t_in_history.append(b_sim.T_in)
-            hvac_power_history.append(dispatch_hvac)
+            hvac_power_history.append(b_sim.P_HVAC)
             ev_power_history.append(actual_ev_power)
-            total_power_history.append(base_d + dispatch_hvac + actual_ev_power)
+            total_power_history.append(base_d + b_sim.P_HVAC + actual_ev_power)
             for ev in ev_sim.evs:
                 ev_soc_history[ev.id].append(ev.soc)
 
