@@ -85,3 +85,13 @@ To test the complete VTN/VEN network communication workflow over HTTP:
 ```bash
 python dt_openadr_poc/main_simulation.py
 ```
+
+
+
+
+### Digital Twin Architecture and Anatomy for multy energy system digitral Twin Sandobxing
+
+Image from NotebookLM
+<img width="1376" height="768" alt="Multi-Energy_Digital_Twins_-_Slide_4" src="https://github.com/user-attachments/assets/fb502730-1ed7-42b1-ba95-f1814afadb34" />
+
+
