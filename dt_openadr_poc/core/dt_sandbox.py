@@ -144,8 +144,9 @@ class DigitalTwinSandbox:
             # Run physical steps
             b_sim.step(T_out, dispatch_hvac, dt_hours, mode="cooling", control_override=is_controlled)
             actual_ev_power = ev_sim.step(step, dispatch_ev, dt_hours, allocation_method=ev_alloc_method)
+            actual_total_power = base_d + b_sim.P_HVAC + actual_ev_power
             
-            # Check for comfort violations at this step
+            # Check for comfort violations at this step (Thermal penalty J_th)
             if b_sim.is_comfort_violated():
                 feasible = False
                 if b_sim.T_in > b_sim.T_max:
@@ -154,20 +155,31 @@ class DigitalTwinSandbox:
                     score += (b_sim.T_min - b_sim.T_in)
                 violation_details.append(f"Step {step}: Temp {b_sim.T_in:.2f}°C out of comfort bounds [{b_sim.T_min}, {b_sim.T_max}]")
 
+            # Check for DR target shed shortfall during event window (DR penalty J_DR)
+            if start_step <= step < end_step:
+                actual_shed = total_baseline_power - actual_total_power
+                dr_shortfall = max(0.0, power_reduction_target - actual_shed)
+                if dr_shortfall > 1e-3:
+                    feasible = False
+                    w_dr = 1.0  # Weight for energy shortfall (kWh)
+                    score += dr_shortfall * dt_hours * w_dr
+                    violation_details.append(f"Step {step}: DR target shed {power_reduction_target:.1f} kW missed by {dr_shortfall:.1f} kW (actual shed {actual_shed:.1f} kW)")
+
             # Save state trajectories
             t_in_history.append(b_sim.T_in)
             hvac_power_history.append(b_sim.P_HVAC)
             ev_power_history.append(actual_ev_power)
-            total_power_history.append(base_d + b_sim.P_HVAC + actual_ev_power)
+            total_power_history.append(actual_total_power)
             for ev in ev_sim.evs:
                 ev_soc_history[ev.id].append(ev.soc)
 
-            # Check for departure SoC violations
+            # Check for departure SoC violations (Mobility penalty J_SoC)
             departing_violations = ev_sim.check_soc_violations(step + 1)
             if departing_violations:
                 feasible = False
+                w_soc = 100.0  # Weight for SoC shortfall
                 for ev_id, soc, target in departing_violations:
-                    score += (target - soc) * 100 # weight SoC heavily
+                    score += (target - soc) * w_soc
                     violation_details.append(f"Step {step+1}: EV {ev_id} departed with SoC {soc:.2f} (target {target:.2f})")
 
         # Verify final SoC for any EVs that depart during or after

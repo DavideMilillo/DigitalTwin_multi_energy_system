@@ -106,7 +106,7 @@ def run_simulation_for_strategy(strategy_name: str, base_load_profile, T_out_pro
 
             if s_step <= step < e_step:
                 # Dynamic load limit check matching run_offline_poc.py
-                base_hvac_nom = 6.0
+                base_hvac_nom = real_building.P_HVAC_baseline
                 base_ev_nom = real_ev_fleet.get_baseline_power(step, dt_hours)
                 base_tot_nom = base_d + base_hvac_nom + base_ev_nom
                 target_limit = max(0.0, base_tot_nom - t_shed)

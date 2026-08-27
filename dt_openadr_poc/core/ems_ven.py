@@ -156,13 +156,14 @@ class EMSOpenADRNode:
                 best_strategy = min(feasible_strategies, key=lambda x: x[2])
                 print(f"[EMS VEN] Strategy {best_strategy[0]} is feasible with best score. Activating Strategy {best_strategy[0]}.")
                 self.dispatch_results.append((best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW))
+                self.event_processed.set()
+                return 'optIn'
             else:
                 best_strategy = min(strategies, key=lambda x: x[2])
-                print(f"[EMS VEN] WARNING: All strategies violate bounds. Choosing Strategy {best_strategy[0]} with minimal impact (Score: {best_strategy[2]:.2f}).")
+                print(f"[EMS VEN] WARNING: All candidate strategies are infeasible (Score: {best_strategy[2]:.2f}). Activating Pareto fallback Strategy {best_strategy[0]} locally and responding with 'optOut' to VTN.")
                 self.dispatch_results.append((best_strategy[0], best_strategy[3], current_step, start_step, total_duration_steps, max_shed_kW))
-                
-            self.event_processed.set()
-            return 'optIn'
+                self.event_processed.set()
+                return 'optOut'
             
         except Exception as e:
             print(f"[EMS VEN] Error processing event: {e}")

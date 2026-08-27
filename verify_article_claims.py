@@ -155,7 +155,7 @@ async def run_online_verification():
             is_ctrl = True
 
             if s_st <= step < e_st:
-                base_tot_step = base_d + 6.0 + real_ev_fleet.get_baseline_power(step, dt_hours)
+                base_tot_step = base_d + real_building.P_HVAC_baseline + real_ev_fleet.get_baseline_power(step, dt_hours)
                 t_lim = max(0.0, base_tot_step - ts)
                 curr_unctrl = base_d + dhvac
                 if curr_unctrl + dev > t_lim:

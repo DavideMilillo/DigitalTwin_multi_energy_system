@@ -215,7 +215,7 @@ async def main():
 
             # Dynamically enforce target shed if in event window
             if s_step <= step < e_step:
-                base_tot_step = base_d + 6.0 + real_ev_fleet.get_baseline_power(step, dt_hours)
+                base_tot_step = base_d + real_building.P_HVAC_baseline + real_ev_fleet.get_baseline_power(step, dt_hours)
                 target_limit = max(0.0, base_tot_step - t_shed)
                 current_uncontrollable = base_d + dispatch_hvac_val
                 if current_uncontrollable + dispatch_ev_val > target_limit:
