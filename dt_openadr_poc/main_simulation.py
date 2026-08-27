@@ -65,18 +65,8 @@ async def run_vtn_server():
         intervals=[
             {
                 'dtstart': now,
-                'duration': timedelta(minutes=15),  # 15 min ramp-up
-                'signal_payload': 10.0              # Target reduction of 10 kW (ramp up)
-            },
-            {
-                'dtstart': now + timedelta(minutes=15),
-                'duration': timedelta(minutes=90),  # 90 min max shed
+                'duration': timedelta(minutes=120), # 2 hours constant shed
                 'signal_payload': 20.0              # Target reduction of 20 kW
-            },
-            {
-                'dtstart': now + timedelta(minutes=105),
-                'duration': timedelta(minutes=15),  # 15 min ramp-down
-                'signal_payload': 10.0              # Target reduction of 10 kW (ramp down)
             }
         ]
     )

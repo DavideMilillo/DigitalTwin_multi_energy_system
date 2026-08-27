@@ -82,7 +82,7 @@ async def main():
         base_demand_profile=base_load_profile
     )
 
-    # Simulate receiving two sequential OpenADR events directly instead of starting servers
+    # Define the two sequential OpenADR events
     now = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
     mock_event_1 = {
         'event_descriptor': {
@@ -96,18 +96,8 @@ async def main():
                 'intervals': [
                     {
                         'dtstart': now,
-                        'duration': timedelta(minutes=15),  # 15 min ramp-up
-                        'signal_payload': 10.0              # Target reduction of 10 kW (ramp up)
-                    },
-                    {
-                        'dtstart': now + timedelta(minutes=15),
-                        'duration': timedelta(minutes=90),  # 90 min max shed
+                        'duration': timedelta(minutes=120), # 2 hours constant shed
                         'signal_payload': 20.0              # Target reduction of 20 kW
-                    },
-                    {
-                        'dtstart': now + timedelta(minutes=105),
-                        'duration': timedelta(minutes=15),  # 15 min ramp-down
-                        'signal_payload': 10.0              # Target reduction of 10 kW (ramp down)
                     }
                 ]
             }
@@ -134,22 +124,7 @@ async def main():
         ]
     }
 
-    print("[Simulation] Feeding offline mock OpenADR event 1 to EMS...")
-    response_1 = await ems_node.handle_event(mock_event_1)
-    print(f"[Simulation] EMS returned for Event 1: {response_1}")
-
-    print("[Simulation] Feeding offline mock OpenADR event 2 to EMS...")
-    response_2 = await ems_node.handle_event(mock_event_2)
-    print(f"[Simulation] EMS returned for Event 2: {response_2}")
-
-    # Wait for the OpenADR event to be processed
-    await ems_node.event_processed.wait()
-    print("[Simulation] OpenADR events resolved by EMS. Running full 24h simulation loop...")
-
-    # Extract decisions from EMS
-    dispatch_results = ems_node.dispatch_results
-
-    # Construct merged 24h dispatch schedules across the 96 steps
+    # Construct merged 24h dispatch schedule arrays across 96 steps
     dispatch_hvac_merged = [None] * len(steps)
     dispatch_ev_merged = [None] * len(steps)
     dispatch_strategy_merged = [None] * len(steps)
@@ -157,20 +132,8 @@ async def main():
     dispatch_start_step_merged = [None] * len(steps)
     dispatch_end_step_merged = [None] * len(steps)
 
-    for event in dispatch_results:
-        strategy, trajectories, current_step, start_step, duration_steps, target_shed = event
-        end_step = start_step + duration_steps
-        for step in range(current_step, end_step):
-            if step < len(steps):
-                dispatch_hvac_merged[step] = trajectories["hvac_power"][step - current_step]
-                dispatch_ev_merged[step] = trajectories["ev_power"][step - current_step]
-                dispatch_strategy_merged[step] = strategy
-                dispatch_target_shed_merged[step] = target_shed
-                dispatch_start_step_merged[step] = start_step
-                dispatch_end_step_merged[step] = end_step
-
-    # 7. Run 24h physical simulation loop
-    # We will log the actual trajectories of the system under the chosen dispatch
+    # 4. Run 24h physical closed-loop simulation step by step
+    print("[Simulation] Running 24h closed-loop online physical simulation loop...")
     sim_T_in = []
     sim_total_power = []
     sim_hvac_power = []
@@ -184,7 +147,6 @@ async def main():
     baseline_ev_power = []
     baseline_ev_socs = {ev.id: [] for ev in real_ev_fleet.evs}
 
-    # Temp models for baseline run
     b_base = BuildingThermalModel(
         b_cfg["R_th"], b_cfg["C_th"], b_cfg["COP"],
         b_cfg["T_min"], b_cfg["T_max"], b_cfg["T_in_init"],
@@ -192,14 +154,45 @@ async def main():
     )
     ev_base = EVFleetModel(ev_cfg)
 
+    # Online step-by-step execution
     for step in range(len(steps)):
+        # Check for OpenADR event arrivals (1 hour before event start)
+        if step == 52: # 13:00 (1 hour lookahead before Event 1 at 14:00)
+            print(f"\n[Simulation] Step {step} (13:00): Feeding mock OpenADR Event 1 to EMS VEN...")
+            response_1 = await ems_node.handle_event(mock_event_1)
+            print(f"[Simulation] EMS returned for Event 1: {response_1}")
+            strat, traj, c_step, s_step, dur_steps, t_shed = ems_node.dispatch_results[-1]
+            e_step = s_step + dur_steps
+            for s in range(c_step, e_step):
+                if s < len(steps):
+                    dispatch_hvac_merged[s] = traj["hvac_power"][s - c_step]
+                    dispatch_ev_merged[s] = traj["ev_power"][s - c_step]
+                    dispatch_strategy_merged[s] = strat
+                    dispatch_target_shed_merged[s] = t_shed
+                    dispatch_start_step_merged[s] = s_step
+                    dispatch_end_step_merged[s] = e_step
+
+        if step == 76: # 19:00 (1 hour lookahead before Event 2 at 20:00)
+            print(f"\n[Simulation] Step {step} (19:00): Feeding mock OpenADR Event 2 to EMS VEN...")
+            response_2 = await ems_node.handle_event(mock_event_2)
+            print(f"[Simulation] EMS returned for Event 2: {response_2}")
+            strat, traj, c_step, s_step, dur_steps, t_shed = ems_node.dispatch_results[-1]
+            e_step = s_step + dur_steps
+            for s in range(c_step, e_step):
+                if s < len(steps):
+                    dispatch_hvac_merged[s] = traj["hvac_power"][s - c_step]
+                    dispatch_ev_merged[s] = traj["ev_power"][s - c_step]
+                    dispatch_strategy_merged[s] = strat
+                    dispatch_target_shed_merged[s] = t_shed
+                    dispatch_start_step_merged[s] = s_step
+                    dispatch_end_step_merged[s] = e_step
+
         T_out = T_out_profile[step]
         base_d = base_load_profile[step]
 
-        # --- Baseline Simulation ---
+        # --- Baseline Simulation Step ---
         hvac_p_base = b_base.P_HVAC_baseline
         ev_p_base = ev_base.get_baseline_power(step, dt_hours)
-
         b_base.step(T_out, hvac_p_base, dt_hours, mode="cooling")
         actual_ev_p_base = ev_base.step(step, ev_p_base, dt_hours, allocation_method="proportional")
 
@@ -210,9 +203,8 @@ async def main():
         for ev in ev_base.evs:
             baseline_ev_socs[ev.id].append(ev.soc)
 
-        # --- Dispatch-Optimized (Actual) Simulation ---
+        # --- Dispatch-Optimized (Actual Physical) Simulation Step ---
         if dispatch_hvac_merged[step] is not None:
-            # Apply the optimized dispatch computed by the DT Sandbox for this step
             dispatch_hvac_val = dispatch_hvac_merged[step]
             dispatch_ev_val = dispatch_ev_merged[step]
             strat = dispatch_strategy_merged[step]
@@ -223,7 +215,8 @@ async def main():
 
             # Dynamically enforce target shed if in event window
             if s_step <= step < e_step:
-                target_limit = max(0.0, baseline_total_power[step] - t_shed)
+                base_tot_step = base_d + 6.0 + real_ev_fleet.get_baseline_power(step, dt_hours)
+                target_limit = max(0.0, base_tot_step - t_shed)
                 current_uncontrollable = base_d + dispatch_hvac_val
                 if current_uncontrollable + dispatch_ev_val > target_limit:
                     dispatch_ev_val = max(0.0, target_limit - current_uncontrollable)
@@ -252,6 +245,8 @@ async def main():
         sim_total_power.append(base_d + dispatch_hvac_actual + actual_ev_p_real)
         for ev in real_ev_fleet.evs:
             sim_ev_socs[ev.id].append(ev.soc)
+
+    dispatch_results = ems_node.dispatch_results
 
     # 7.5 Quantitative Verification of Shed and Power Balance
     print("\n--- Quantitative Verification of Shed ---")

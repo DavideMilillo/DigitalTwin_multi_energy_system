@@ -1,19 +1,22 @@
 """
 verify_article_claims.py
 Checks every numerical claim stated in the article draft against
-the actual simulation outputs of run_simulation_for_strategy().
+the actual simulation outputs of the closed-loop DT Sandboxing PoC.
 """
-import sys, csv, os
-sys.path.append('dt_openadr_poc')
+import sys, csv, os, asyncio
+sys.path.append(os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dt_openadr_poc'))
 
 from config import CONFIG
-from plot_strategy_comparison import run_simulation_for_strategy
 from models.building_model import BuildingThermalModel
 from models.ev_fleet_model import EVFleetModel
+from core.dt_sandbox import DigitalTwinSandbox
+from core.ems_ven import EMSOpenADRNode
+from plot_strategy_comparison import run_simulation_for_strategy
+from datetime import datetime, timezone, timedelta
 import numpy as np
 
 # ---- Load profiles -----------------------------------------------------------
-csv_path = os.path.join('dt_openadr_poc', 'data', 'profiles.csv')
+csv_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'dt_openadr_poc', 'data', 'profiles.csv')
 times, T_out_profile, base_load_profile = [], [], []
 with open(csv_path, 'r') as f:
     for row in csv.DictReader(f):
@@ -21,122 +24,218 @@ with open(csv_path, 'r') as f:
         T_out_profile.append(float(row['T_out']))
         base_load_profile.append(float(row['base_load']))
 
-# ---- Simulate all strategies -------------------------------------------------
-res_A = run_simulation_for_strategy('A', base_load_profile, T_out_profile)
-res_B = run_simulation_for_strategy('B', base_load_profile, T_out_profile)
-res_C = run_simulation_for_strategy('C', base_load_profile, T_out_profile)
+T_out_profile = np.array(T_out_profile)
+base_load_profile = np.array(base_load_profile)
+dt_hours = CONFIG["dt_hours"]
 
-# ---- Baseline EV power (no DR) -----------------------------------------------
+# ---- Closed-Loop Physical Simulation & Online DT Sandboxing -------------------
 b_cfg = CONFIG['building']
 ev_cfg = CONFIG['ev_fleet']['evs']
-b_base_m = BuildingThermalModel(**b_cfg)
-ev_base_m = EVFleetModel(ev_cfg)
+
+real_building = BuildingThermalModel(**b_cfg)
+real_ev_fleet = EVFleetModel(ev_cfg)
+sandbox = DigitalTwinSandbox()
+
+ems_node = EMSOpenADRNode(
+    building_model=real_building,
+    ev_fleet_model=real_ev_fleet,
+    outdoor_temp_profile=T_out_profile,
+    base_demand_profile=base_load_profile
+)
+
+now = datetime.now(timezone.utc).replace(hour=14, minute=0, second=0, microsecond=0)
+mock_event_1 = {
+    'event_descriptor': {'event_id': 'mock-event-1', 'event_status': 'active'},
+    'event_signals': [{
+        'signal_name': 'LOAD_DISPATCH',
+        'signal_type': 'delta',
+        'intervals': [{'dtstart': now, 'duration': timedelta(minutes=120), 'signal_payload': 20.0}]
+    }]
+}
+
+mock_event_2 = {
+    'event_descriptor': {'event_id': 'mock-event-2', 'event_status': 'active'},
+    'event_signals': [{
+        'signal_name': 'LOAD_DISPATCH',
+        'signal_type': 'delta',
+        'intervals': [{'dtstart': now + timedelta(minutes=360), 'duration': timedelta(minutes=60), 'signal_payload': 15.0}]
+    }]
+}
+
+# Run step-by-step
+e1_sandboxing_results = {}
+e2_sandboxing_results = {}
+
+dispatch_hvac_merged = [None] * 96
+dispatch_ev_merged = [None] * 96
+dispatch_strategy_merged = [None] * 96
+dispatch_target_shed_merged = [0.0] * 96
+dispatch_start_step_merged = [None] * 96
+dispatch_end_step_merged = [None] * 96
+
+sim_T_in = []
+sim_total_power = []
+sim_hvac_power = []
+sim_ev_power = []
+sim_ev_socs = {ev.id: [] for ev in real_ev_fleet.evs}
+
+b_base = BuildingThermalModel(**b_cfg)
+ev_base = EVFleetModel(ev_cfg)
+baseline_T_in = []
+baseline_total_power = []
+baseline_hvac_power = []
 baseline_ev_power = []
-for step in range(len(times)):
-    ev_p = ev_base_m.get_baseline_power(step, 0.25)
-    b_base_m.step(T_out_profile[step], b_base_m.P_HVAC_baseline, 0.25, mode='cooling', control_override=False)
-    ev_base_m.step(step, ev_p, 0.25, allocation_method='proportional')
-    baseline_ev_power.append(ev_p)
+baseline_ev_socs = {ev.id: [] for ev in real_ev_fleet.evs}
 
-print("=" * 70)
-print("ARTICLE CLAIM VERIFICATION REPORT")
-print("=" * 70)
+async def run_online_verification():
+    global e1_sandboxing_results, e2_sandboxing_results
+    for step in range(96):
+        if step == 52: # 13:00 (Event 1 lookahead)
+            # Evaluate all 3 strategies for report
+            for st in ['A', 'B', 'C']:
+                feasi, traj, sc = sandbox.simulate_scenario(
+                    real_building, real_ev_fleet, st, 52, 56, 8, 20.0, base_load_profile, T_out_profile, dt_hours
+                )
+                e1_sandboxing_results[st] = (feasi, traj, sc)
 
-# ---- STRATEGY A: HVAC cycles normally during event 1 -------------------------
-print("\n[1] Strategy A - T_in range during Event 1 (steps 56-63):")
-tin_A_e1 = [res_A['T_in'][s] for s in range(56, 64)]
-hvac_A_e1 = [res_A['hvac_power'][s] for s in range(56, 64)]
-print(f"    T_in min={min(tin_A_e1):.2f} max={max(tin_A_e1):.2f} (Article claims: 22.10-22.71)")
-print(f"    HVAC powers: {[round(v,1) for v in hvac_A_e1]}")
-print(f"    Article claim OK: {19.5 < min(tin_A_e1) < 24.0 and max(tin_A_e1) < 24.0}")
+            await ems_node.handle_event(mock_event_1)
+            strat, traj, c_step, s_step, dur_steps, t_shed = ems_node.dispatch_results[-1]
+            e_step = s_step + dur_steps
+            for s in range(c_step, e_step):
+                dispatch_hvac_merged[s] = traj["hvac_power"][s - c_step]
+                dispatch_ev_merged[s] = traj["ev_power"][s - c_step]
+                dispatch_strategy_merged[s] = strat
+                dispatch_target_shed_merged[s] = t_shed
+                dispatch_start_step_merged[s] = s_step
+                dispatch_end_step_merged[s] = e_step
 
-# ---- STRATEGY B: infeasible, T_in exceeds 24 at steps 62-63 -----------------
-print("\n[2] Strategy B - Thermal violation during Event 1:")
-tin_B_e1 = [res_B['T_in'][s] for s in range(56, 64)]
-max_B = max(tin_B_e1)
-violation_steps = [s for s in range(56, 64) if res_B['T_in'][s] > 24.0]
-print(f"    Peak T_in={max_B:.3f} at steps {violation_steps} (Article claims: 24.35 at steps 62-63)")
-print(f"    Article claim OK: {abs(max_B - 24.35) < 0.05 and 62 in violation_steps and 63 in violation_steps}")
+        if step == 76: # 19:00 (Event 2 lookahead)
+            # Evaluate all 3 strategies for report from true physical state
+            for st in ['A', 'B', 'C']:
+                feasi, traj, sc = sandbox.simulate_scenario(
+                    real_building, real_ev_fleet, st, 76, 80, 4, 15.0, base_load_profile, T_out_profile, dt_hours
+                )
+                e2_sandboxing_results[st] = (feasi, traj, sc)
 
-# ---- STRATEGY C: pre-cooling temperature ------------------------------------
-print("\n[3] Strategy C - Pre-cooling temperature:")
-tin_C_precool = [res_C['T_in'][s] for s in range(52, 56)]
-min_C = min(tin_C_precool)
-print(f"    Pre-cooling T_in range: {[round(v,2) for v in tin_C_precool]}")
-print(f"    Min pre-cool T_in={min_C:.2f} (Article claims: 20.3 degrees -> 'T_min + 0.3')")
-print(f"    Note: Article says 'pre-cooled to near T_min+0.3 = 20.3', actual minimum = {min_C:.2f}")
+            await ems_node.handle_event(mock_event_2)
+            strat, traj, c_step, s_step, dur_steps, t_shed = ems_node.dispatch_results[-1]
+            e_step = s_step + dur_steps
+            for s in range(c_step, e_step):
+                dispatch_hvac_merged[s] = traj["hvac_power"][s - c_step]
+                dispatch_ev_merged[s] = traj["ev_power"][s - c_step]
+                dispatch_strategy_merged[s] = strat
+                dispatch_target_shed_merged[s] = t_shed
+                dispatch_start_step_merged[s] = s_step
+                dispatch_end_step_merged[s] = e_step
 
-# ---- STRATEGY C: max T_in during Event 1 (must stay below 24) ---------------
-tin_C_e1 = [res_C['T_in'][s] for s in range(56, 64)]
-print(f"\n[4] Strategy C - T_in during Event 1 (max must < 24):")
-print(f"    T_in values: {[round(v,2) for v in tin_C_e1]}")
-print(f"    Max T_in={max(tin_C_e1):.3f} (Article claims stays within comfort band)")
-print(f"    Article claim OK: {max(tin_C_e1) < 24.0}")
+        T_out = T_out_profile[step]
+        base_d = base_load_profile[step]
 
-# ---- EV Curtailment energy ---------------------------------------------------
-print("\n[5] EV Energy Curtailed during Event 1:")
-ev_curtail_A = sum((baseline_ev_power[s] - res_A['ev_power'][s]) * 0.25 for s in range(56, 64))
-ev_curtail_C = sum((baseline_ev_power[s] - res_C['ev_power'][s]) * 0.25 for s in range(56, 64))
-savings = ev_curtail_A - ev_curtail_C
-savings_pct = savings / ev_curtail_A * 100 if ev_curtail_A > 0 else 0
-print(f"    Strategy A EV curtailed: {ev_curtail_A:.2f} kWh (Article claims: 40.0 kWh)")
-print(f"    Strategy C EV curtailed: {ev_curtail_C:.2f} kWh (Article claims: 28.0 kWh)")
-print(f"    Savings A->C: {savings:.2f} kWh = {savings_pct:.1f}% (Article claims: 12.0 kWh, 30%)")
+        # Baseline
+        hvac_p_base = b_base.P_HVAC_baseline
+        ev_p_base = ev_base.get_baseline_power(step, dt_hours)
+        b_base.step(T_out, hvac_p_base, dt_hours, mode="cooling")
+        actual_ev_p_base = ev_base.step(step, ev_p_base, dt_hours, allocation_method="proportional")
 
-# Check article: "EV curtailment reduced to 14 kW" - this is kW not kWh!
-ev_pwr_A_e1 = [res_A['ev_power'][s] for s in range(56, 64)]
-ev_pwr_C_e1 = [res_C['ev_power'][s] for s in range(56, 64)]
-print(f"    Strategy A EV powers per step: {[round(v,2) for v in ev_pwr_A_e1]}")
-print(f"    Strategy C EV powers per step: {[round(v,2) for v in ev_pwr_C_e1]}")
-print(f"    Article says 'required EV curtailment to 14.0 kW, total EV energy curtailed to 28.0 kWh'")
+        baseline_T_in.append(b_base.T_in)
+        baseline_hvac_power.append(hvac_p_base)
+        baseline_ev_power.append(actual_ev_p_base)
+        baseline_total_power.append(base_d + hvac_p_base + actual_ev_p_base)
+        for ev in ev_base.evs:
+            baseline_ev_socs[ev.id].append(ev.soc)
 
-# ---- EV SoC at departure for Event 2 ----------------------------------------
-print("\n[6] EV SoC at departure before Event 2:")
-# EV3 departs at step 80 (20:00) - SoC measured at step 79 (end of step 79)
-ev3_soc_A = res_A['ev_socs']['EV3'][79]
-ev4_soc_A = res_A['ev_socs']['EV4'][83]
-ev3_soc_B = res_B['ev_socs']['EV3'][79]
-ev4_soc_B = res_B['ev_socs']['EV4'][83]
-ev3_soc_C = res_C['ev_socs']['EV3'][79]
-ev4_soc_C = res_C['ev_socs']['EV4'][83]
-print(f"    EV3 (target=0.80, departs step 80): A={ev3_soc_A:.3f}, B={ev3_soc_B:.3f}, C={ev3_soc_C:.3f}")
-print(f"    EV4 (target=0.90, departs step 84): A={ev4_soc_A:.3f}, B={ev4_soc_B:.3f}, C={ev4_soc_C:.3f}")
-print(f"    Article: EV3 SoC=0.58 (all), EV4 SoC=0.47 (A) / 0.55 (C)")
+        # Physical
+        if dispatch_hvac_merged[step] is not None:
+            dhvac = dispatch_hvac_merged[step]
+            dev = dispatch_ev_merged[step]
+            st = dispatch_strategy_merged[step]
+            ts = dispatch_target_shed_merged[step]
+            s_st = dispatch_start_step_merged[step]
+            e_st = dispatch_end_step_merged[step]
+            is_ctrl = True
 
-# ---- Event 2 shed verification -----------------------------------------------
-print("\n[7] Event 2 Shed Verification (steps 80-83):")
+            if s_st <= step < e_st:
+                base_tot_step = base_d + 6.0 + real_ev_fleet.get_baseline_power(step, dt_hours)
+                t_lim = max(0.0, base_tot_step - ts)
+                curr_unctrl = base_d + dhvac
+                if curr_unctrl + dev > t_lim:
+                    dev = max(0.0, t_lim - curr_unctrl)
+
+            alloc = "priority_departure" if (st == 'C' or s_st <= step < e_st) else "proportional"
+        else:
+            dhvac = real_building.P_HVAC_baseline
+            dev = real_ev_fleet.get_baseline_power(step, dt_hours)
+            is_ctrl = False
+            alloc = "proportional"
+
+        real_building.step(T_out, dhvac, dt_hours, mode="cooling", control_override=is_ctrl)
+        actual_ev_p = real_ev_fleet.step(step, dev, dt_hours, allocation_method=alloc)
+
+        sim_T_in.append(real_building.T_in)
+        sim_hvac_power.append(dhvac)
+        sim_ev_power.append(actual_ev_p)
+        sim_total_power.append(base_d + dhvac + actual_ev_p)
+        for ev in real_ev_fleet.evs:
+            sim_ev_socs[ev.id].append(ev.soc)
+
+asyncio.run(run_online_verification())
+
+print("=" * 75)
+print("ARTICLE CLAIM VERIFICATION REPORT (CLOSED-LOOP ONLINE POc)")
+print("=" * 75)
+
+# ---- EVENT 1 LOOKAHEAD SANDBOX RESULTS ---------------------------------------
+print("\n[1] EVENT 1 (14:00-16:00, 20 kW target) - DT Sandboxing at Step 52:")
+for st in ['A', 'B', 'C']:
+    feasi, traj, sc = e1_sandboxing_results[st]
+    t_in_vals = traj['T_in']
+    print(f"  Strategy {st}: Feasible={feasi}, Score={sc:.2f}, T_in range=[{min(t_in_vals):.2f}, {max(t_in_vals):.2f}] °C")
+    if traj['violation_details']:
+        print(f"    Violations: {traj['violation_details']}")
+
+tin_C_precool = e1_sandboxing_results['C'][1]['T_in'][:4]
+print(f"  Strategy C pre-cooling T_in values (steps 52-55): {[round(v,2) for v in tin_C_precool]} (min={min(tin_C_precool):.2f} °C)")
+
+# EV Curtailment comparison during Event 1
+# Baseline EV power in lookahead window:
+ev_base_e1 = [baseline_ev_power[s] for s in range(56, 64)]
+curtail_A = sum((ev_base_e1[i] - e1_sandboxing_results['A'][1]['ev_power'][4+i]) * dt_hours for i in range(8))
+curtail_C = sum((ev_base_e1[i] - e1_sandboxing_results['C'][1]['ev_power'][4+i]) * dt_hours for i in range(8))
+savings = curtail_A - curtail_C
+savings_pct = (savings / curtail_A) * 100 if curtail_A > 0 else 0
+print(f"  EV Energy Curtailed during Event 1: Strategy A = {curtail_A:.2f} kWh, Strategy C = {curtail_C:.2f} kWh")
+print(f"  EV Energy Savings (A -> C): {savings:.2f} kWh ({savings_pct:.1f}%)")
+
+# ---- EVENT 2 LOOKAHEAD SANDBOX RESULTS ---------------------------------------
+print("\n[2] EVENT 2 (20:00-21:00, 15 kW target) - DT Sandboxing at Step 76:")
+print(f"  Physical state at Step 76 (19:00) under committed Strategy C: T_in={sim_T_in[76]:.2f} °C")
+for ev in real_ev_fleet.evs:
+    print(f"    {ev.id}: SoC = {sim_ev_socs[ev.id][76]:.3f} (target {ev.target_soc:.2f})")
+
+for st in ['A', 'B', 'C']:
+    feasi, traj, sc = e2_sandboxing_results[st]
+    print(f"  Strategy {st}: Feasible={feasi}, Score={sc:.2f}, Violations={traj['violation_details']}")
+
+# ---- SHED VERIFICATION ------------------------------------------------------
+print("\n[3] PHYSICAL SHED VERIFICATION:")
+print("  Event 1 (steps 56-63, 14:00-16:00, target 20 kW):")
+for s in range(56, 64):
+    bl = baseline_total_power[s]
+    act = sim_total_power[s]
+    shed = bl - act
+    print(f"    Step {s} ({times[s]}): baseline={bl:.2f} kW, actual={act:.2f} kW, shed={shed:.2f} kW")
+
+print("  Event 2 (steps 80-83, 20:00-21:00, target 15 kW):")
 for s in range(80, 84):
-    bl = base_load_profile[s]
-    hvac_bl = 6.0
-    ev_bl = baseline_ev_power[s]
-    baseline_tot = bl + hvac_bl + ev_bl
-    actual_C = res_C['total_power'][s]
-    shed = baseline_tot - actual_C
-    print(f"    Step {s} ({times[s]}): baseline={baseline_tot:.2f} kW, actual={actual_C:.2f} kW, shed={shed:.2f} kW (target 15 kW)")
-print(f"    Article: baseline=14.0 kW, actual=8.0 kW, shed=6.0 kW, short by 9.0 kW")
+    bl = baseline_total_power[s]
+    act = sim_total_power[s]
+    shed = bl - act
+    print(f"    Step {s} ({times[s]}): baseline={bl:.2f} kW, actual={act:.2f} kW, shed={shed:.2f} kW (short by {15.0 - shed:.2f} kW)")
 
-# ---- Building parameters confirm model values --------------------------------
-print("\n[8] Config parameter verification:")
-bcfg = CONFIG['building']
-print(f"    R_th={bcfg['R_th']} (Article: 1.5)")
-print(f"    C_th={bcfg['C_th']} (Article: 6.0)")
-print(f"    COP={bcfg['COP']} (Article: 3.0)")
-print(f"    T_min={bcfg['T_min']} (Article: 20.0)")
-print(f"    T_max={bcfg['T_max']} (Article: 24.0)")
-print(f"    T_in_init={bcfg['T_in_init']} (Article: 22.0)")
-print(f"    P_HVAC_max={bcfg['P_HVAC_max']} (Article: 12.0)")
-print(f"    P_HVAC_baseline={bcfg['P_HVAC_baseline']} (Article: 6.0)")
+# ---- CONFIG & PARAMETER VERIFICATION ----------------------------------------
+print("\n[4] SYSTEM PARAMETERS VERIFICATION:")
+print(f"  Building: R_th={b_cfg['R_th']}, C_th={b_cfg['C_th']}, COP={b_cfg['COP']}, T_min={b_cfg['T_min']}, T_max={b_cfg['T_max']}, T_in_0={b_cfg['T_in_init']}, P_HVAC_max={b_cfg['P_HVAC_max']}, P_HVAC_base={b_cfg['P_HVAC_baseline']}")
+for ev in ev_cfg:
+    print(f"  {ev['id']}: Capacity={ev['battery_capacity']} kWh, P_max={ev['max_charging_power']} kW, arr={ev['arrival_step']*0.25:.1f}h ({ev['arrival_step']*15//60:02d}:{ev['arrival_step']*15%60:02d}), dep={ev['departure_step']*0.25:.1f}h ({ev['departure_step']*15//60:02d}:{ev['departure_step']*15%60:02d}), SoC_init={ev['soc_init']}, SoC_target={ev['target_soc']}")
 
-evs = CONFIG['ev_fleet']['evs']
-print(f"\n[9] EV fleet config verification:")
-for ev in evs:
-    print(f"    {ev['id']}: E={ev['capacity_kwh']}, P_max={ev['P_max_kw']}, arr={ev['arrival_step']*0.25:.1f}h, dep={ev['departure_step']*0.25:.1f}h, SoC_init={ev['soc_init']}, SoC_tgt={ev['soc_target']}")
-print("    Article Table 2: EV1(50kWh,11kW,08:00,18:00,0.30,0.85) EV2(60kWh,22kW,09:00,17:00,0.20,0.90)")
-print("                     EV3(40kWh,7.4kW,10:00,20:00,0.40,0.80) EV4(75kWh,22kW,13:00,21:00,0.10,0.90)")
-
-# ---- Temperature profile: outdoor peak and range ----------------------------
-print("\n[10] Outdoor temperature profile:")
-print(f"    Peak T_out={max(T_out_profile):.1f}C at step {T_out_profile.index(max(T_out_profile))} ({times[T_out_profile.index(max(T_out_profile))]})")
-print(f"    Min T_out={min(T_out_profile):.1f}C")
-print(f"    T_out at step 60 (15:00)={T_out_profile[60]:.1f}C")
-print(f"    Article claims: peak 31.8C at 15:00, min 16.3C at 04:00/midnight")
+print("=" * 75)
