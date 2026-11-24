@@ -1,0 +1,99 @@
+{
+  "machine": {
+    "timestamp": "2026-11-24T10:37:05",
+    "python": "3.11.11",
+    "os": "Windows 10",
+    "machine": "AMD64",
+    "processor": "Intel64 Family 6 Model 140 Stepping 1, GenuineIntel",
+    "logical_cpus": 8,
+    "numpy": "2.4.6",
+    "physical_cpus": 4,
+    "cpu_max_mhz": 2419.0,
+    "ram_gb": 16.9
+  },
+  "event1_decision": {
+    "stats": {
+      "n": 2000,
+      "mean_ms": 0.9891000000325221,
+      "median_ms": 0.9546500004944392,
+      "stdev_ms": 0.15610841051752877,
+      "p95_ms": 1.175544999568956,
+      "p99_ms": 1.5872700003637874,
+      "min_ms": 0.7523000003857305,
+      "max_ms": 3.8727000010112533
+    },
+    "meta": {
+      "strategies": 3,
+      "lookahead_steps": 12,
+      "n_ev": 4,
+      "reps": 2000,
+      "warmup": 200
+    }
+  },
+  "scaling": {
+    "vs_steps": [
+      {
+        "lookahead_steps": 8,
+        "n_ev": 4,
+        "mean_ms": 0.31986679999681655
+      },
+      {
+        "lookahead_steps": 16,
+        "n_ev": 4,
+        "mean_ms": 0.43877829999109963
+      },
+      {
+        "lookahead_steps": 32,
+        "n_ev": 4,
+        "mean_ms": 0.6799206000305276
+      },
+      {
+        "lookahead_steps": 48,
+        "n_ev": 4,
+        "mean_ms": 0.8700777999692946
+      },
+      {
+        "lookahead_steps": 64,
+        "n_ev": 4,
+        "mean_ms": 0.9866706000248088
+      },
+      {
+        "lookahead_steps": 96,
+        "n_ev": 4,
+        "mean_ms": 1.2449128000152996
+      }
+    ],
+    "vs_vehicles": [
+      {
+        "lookahead_steps": 12,
+        "n_ev": 1,
+        "mean_ms": 0.22247900000184018
+      },
+      {
+        "lookahead_steps": 12,
+        "n_ev": 2,
+        "mean_ms": 0.2649831000089762
+      },
+      {
+        "lookahead_steps": 12,
+        "n_ev": 4,
+        "mean_ms": 0.38049969999519817
+      },
+      {
+        "lookahead_steps": 12,
+        "n_ev": 8,
+        "mean_ms": 0.6496161999712058
+      },
+      {
+        "lookahead_steps": 12,
+        "n_ev": 16,
+        "mean_ms": 1.070365599975048
+      },
+      {
+        "lookahead_steps": 12,
+        "n_ev": 32,
+        "mean_ms": 1.9118601999998646
+      }
+    ]
+  }
+}
